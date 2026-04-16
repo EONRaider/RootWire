@@ -1,0 +1,12 @@
+Metadata-Version: 2.1
+Name: netprotocols
+Version: 0.5.0
+Summary: Low-level implementations of common networking protocols
+Author: EONRaider
+Author-email: livewire_voodoo@protonmail.com
+Requires-Python: >=3.7,<4.0
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.7
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9

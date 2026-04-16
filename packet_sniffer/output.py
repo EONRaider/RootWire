@@ -10,7 +10,12 @@ from abc import ABC, abstractmethod
 class Output(ABC):
     """Interface for the implementation of all classes responsible for
     further processing/output of the information gathered by the
-    PacketSniffer class."""
+    PacketSniffer class.
+
+    Implementations must provide :meth:`update`, which is invoked for every
+    decoded frame. Optionally, subclasses may define :meth:`finalize` to flush
+    buffered work when capture ends (for example DHCP audit summaries).
+    """
 
     def __init__(self, subject):
         subject.register(self)

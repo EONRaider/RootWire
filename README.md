@@ -47,9 +47,10 @@ user@host:~/packet-sniffer$ python3 build.py
 
 ## Usage
 ```
-sniffer.py [-h] [-i INTERFACE] [-d]
+sniffer.py [-h] [-i INTERFACE] [-d] [--dhcp-audit] [--pcap FILE]
+           [--dhcp-window SECONDS] [--json] [--dhcp-verbose] [--audit-quiet]
 
-Network Packet Sniffer
+Network packet sniffer with optional DHCP auditing
 
 optional arguments:
   -h, --help            show this help message and exit
@@ -57,6 +58,26 @@ optional arguments:
                         Interface from which packets will be captured (monitors
                         all available interfaces by default).
   -d, --data            Output packet data during capture.
+  --dhcp-audit          Record DHCP/BOOTP during live capture and print a report
+                        when the capture stops (Ctrl+C).
+  --pcap FILE           Replay a capture file and run the DHCP audit (no root).
+  --dhcp-window SECONDS Limit H1/H2 analysis to this many seconds after the first
+                        DHCP packet (omit to use the full trace).
+  --json                Emit JSON instead of plain text for DHCP reports.
+  --dhcp-verbose        Print each DHCP datagram as it is parsed.
+  --audit-quiet         Hide normal packet output while auditing DHCP live.
+```
+
+### DHCP audit examples
+```
+# Offline lab capture (does not require sudo)
+python3 packet_sniffer/sniffer.py --pcap captura.pcapng
+
+# Live capture with DHCP heuristics at the end (requires sudo)
+sudo python3 packet_sniffer/sniffer.py --dhcp-audit --audit-quiet
+
+# Machine-readable export
+python3 packet_sniffer/sniffer.py --pcap captura.pcap --json > report.json
 ```
 
 ## Legal Disclaimer

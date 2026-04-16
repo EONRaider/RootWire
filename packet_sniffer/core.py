@@ -90,6 +90,17 @@ class PacketSniffer:
         processing/output."""
         [observer.update(*args, **kwargs) for observer in self._observers]
 
+    def finalize_observers(self) -> None:
+        """Invoke ``finalize()`` on observers that expose it (optional hook).
+
+        DHCP auditing uses this to flush accumulated state after the capture
+        loop ends (for example on ``KeyboardInterrupt``).
+        """
+        for observer in self._observers:
+            finalize = getattr(observer, "finalize", None)
+            if callable(finalize):
+                finalize()
+
     def listen(self, interface: str) -> Iterator:
         """Directly output a captured Ethernet frame while
         simultaneously notifying all registered observers, if any.

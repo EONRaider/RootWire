@@ -8,6 +8,7 @@ authors = ["EONRaider <livewire_voodoo@protonmail.com>"]
 python = ">=3.8,<3.11"
 pyinstaller = "^5.1"
 netprotocols = "^0.5.0"
+dpkt = "^1.9.8"
 
 [tool.poetry.dev-dependencies]
 
