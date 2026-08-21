@@ -3,6 +3,6 @@ frames with the netprotocols library."""
 
 from packet_sniffer.frame import DecodedFrame
 
-__version__ = "3.0.0"
+__version__ = "4.0.0"
 
 __all__ = ["DecodedFrame", "__version__"]

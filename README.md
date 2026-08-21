@@ -30,8 +30,12 @@ capture survives whatever the network delivers.
 ## Installation
 
 ```
-pipx install packet-sniffer        # or: uv tool install packet-sniffer
+pipx install "git+https://github.com/EONRaider/Packet-Sniffer.git"
 ```
+
+(Or `uv tool install` with the same URL. The application is not
+published to PyPI under this name — that debut is reserved for its
+upcoming rename.)
 
 Or run from a clone with [uv](https://docs.astral.sh/uv/):
 

@@ -4,11 +4,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.0.0] - 2026-08-21
+## [4.0.0] - 2026-08-21
 
 Complete rebuild on netprotocols 1.0. The CLI gains proper entry
 points (`packet-sniffer` console script and `python -m packet_sniffer`);
 internals are rewritten around an immutable `DecodedFrame`.
+
+*A note on the version number*: this repository shipped tags `3.1.0`
+and `3.1.2` in 2022 (an era whose entries never made it into this
+changelog), so the rebuild releases as 4.0.0 rather than reusing the
+3.x line.
 
 ### Changed
 - Decoding is a pure function (`decoder.decode_frame`) producing a

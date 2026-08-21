@@ -1,6 +1,6 @@
 [project]
 name = "packet-sniffer"
-version = "3.0.0"
+version = "4.0.0"
 description = "A network traffic monitor that decodes raw Ethernet frames"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
