@@ -13,3 +13,5 @@ dist/
 
 # Environments
 venv/
+.venv/
+benchmarks/frames.bin

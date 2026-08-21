@@ -1,0 +1,69 @@
+name: CI
+
+# Until netprotocols 1.0.0 is published to PyPI, the library is
+# resolved from a sibling checkout of its repository (matching the
+# [tool.uv.sources] path override in pyproject.toml). Once 1.0.0 is on
+# PyPI, the second checkout step can be dropped.
+
+on:
+  push:
+    branches: [master, overhaul]
+  pull_request:
+    branches: [master]
+
+defaults:
+  run:
+    working-directory: Packet-Sniffer
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: Packet-Sniffer
+      - uses: actions/checkout@v5
+        with:
+          repository: EONRaider/NETProtocols
+          ref: overhaul
+          path: NETProtocols
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv run ruff check
+      - run: uv run ruff format --check
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: Packet-Sniffer
+      - uses: actions/checkout@v5
+        with:
+          repository: EONRaider/NETProtocols
+          ref: overhaul
+          path: NETProtocols
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv run mypy
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: Packet-Sniffer
+      - uses: actions/checkout@v5
+        with:
+          repository: EONRaider/NETProtocols
+          ref: overhaul
+          path: NETProtocols
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv run pytest --cov=packet_sniffer --cov-report=term
