@@ -7,7 +7,7 @@ import random
 import struct
 from pathlib import Path
 
-from netprotocols import ARP, ICMPv4, TCP, UDP, Ethernet, IPv4, Packet
+from netprotocols import ARP, TCP, UDP, Ethernet, ICMPv4, IPv4, Packet
 
 random.seed(1701)
 OUT = Path(__file__).parent / "frames.bin"
@@ -21,26 +21,49 @@ def eth(ethertype: int) -> Ethernet:
 
 def ipv4(protocol: int, total_length: int) -> IPv4:
     return IPv4(
-        version=4, ihl=5, dscp=0, ecn=0, total_length=total_length,
-        identification=random.randrange(65536), flags=2, fragment_offset=0,
-        ttl=64, protocol=protocol, checksum=0x2B51,
-        src="192.168.1.96", dst="192.168.1.254",
+        version=4,
+        ihl=5,
+        dscp=0,
+        ecn=0,
+        total_length=total_length,
+        identification=random.randrange(65536),
+        flags=2,
+        fragment_offset=0,
+        ttl=64,
+        protocol=protocol,
+        checksum=0x2B51,
+        src="192.168.1.96",
+        dst="192.168.1.254",
     )
 
 
 def build() -> list[bytes]:
     payload = bytes(random.randrange(256) for _ in range(200))
     tcp = TCP(
-        src_port=51888, dst_port=443, seq=1, ack=2, data_offset=8,
-        reserved=0, flags=0x018, window=64240, checksum=0, urgent_pointer=0,
+        src_port=51888,
+        dst_port=443,
+        seq=1,
+        ack=2,
+        data_offset=8,
+        reserved=0,
+        flags=0x018,
+        window=64240,
+        checksum=0,
+        urgent_pointer=0,
         options=b"\x01\x01\x08\x0a\x00\x08\xca\x61\x00\x01\x69\x2e",
     )
     udp = UDP(src_port=2398, dst_port=53, length=8 + 60, checksum=0)
     icmp = ICMPv4(type=8, code=0, checksum=0, rest=b"\x00\x01\x00\x01")
     arp = ARP(
-        htype=1, ptype=0x0800, hlen=6, plen=4, oper=1,
-        sha="00:07:0d:af:f4:54", spa="192.168.1.96",
-        tha="00:00:00:00:00:00", tpa="192.168.1.254",
+        htype=1,
+        ptype=0x0800,
+        hlen=6,
+        plen=4,
+        oper=1,
+        sha="00:07:0d:af:f4:54",
+        spa="192.168.1.96",
+        tha="00:00:00:00:00:00",
+        tpa="192.168.1.254",
     )
     return [
         bytes(Packet(eth(0x0800), ipv4(6, 20 + 32 + 200), tcp)) + payload,

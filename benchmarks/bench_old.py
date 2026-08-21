@@ -48,8 +48,10 @@ class OldDecoder:
 
 def main() -> None:
     decoder = OldDecoder()
-    run("old (2.1.0 chain, netprotocols 0.8.0)",
-        lambda data, n: decoder.decode(data))
+    run(
+        "old (2.1.0 chain, netprotocols 0.8.0)",
+        lambda data, n: decoder.decode(data),
+    )
 
 
 if __name__ == "__main__":
