@@ -53,6 +53,7 @@ packages = ["src/packet_sniffer"]
 [tool.ruff]
 line-length = 80
 src = ["src", "tests"]
+extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "B", "UP", "C4", "SIM", "RUF"]
