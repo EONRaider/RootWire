@@ -13,3 +13,4 @@ dist/
 
 # Environments
 venv/
+.venv/

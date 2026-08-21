@@ -1,4 +1,0 @@
-altgraph==0.17.2
-netprotocols==0.5.0
-pyinstaller==5.1
-pyinstaller-hooks-contrib==2022.7

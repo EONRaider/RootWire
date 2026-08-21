@@ -1,16 +1,73 @@
-[tool.poetry]
+[project]
 name = "packet-sniffer"
-version = "2.0.1"
-description = "A Network Packet Sniffing tool developed in Python 3"
-authors = ["EONRaider <livewire_voodoo@protonmail.com>"]
+version = "3.0.0"
+description = "A network traffic monitor that decodes raw Ethernet frames"
+readme = "README.md"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{ name = "EONRaider", email = "livewire_voodoo@protonmail.com" }]
+requires-python = ">=3.12"
+keywords = ["sniffer", "networking", "packets", "monitoring", "security"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Information Technology",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: System :: Networking :: Monitoring",
+]
+dependencies = ["netprotocols>=1.0,<2"]
 
-[tool.poetry.dependencies]
-python = ">=3.8,<3.11"
-pyinstaller = "^5.1"
-netprotocols = "^0.5.0"
+[project.scripts]
+packet-sniffer = "packet_sniffer.cli:main"
 
-[tool.poetry.dev-dependencies]
+[project.urls]
+Homepage = "https://github.com/EONRaider/Packet-Sniffer"
+Repository = "https://github.com/EONRaider/Packet-Sniffer"
+Changelog = "https://github.com/EONRaider/Packet-Sniffer/blob/master/CHANGELOG.md"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.14",
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "ruff>=0.9",
+]
+
+[tool.uv.sources]
+# Development resolves the library from the sibling checkout; releases
+# use the published netprotocols from PyPI (>=1.0). Remove this table
+# once 1.0.0 is on PyPI if a pure-registry resolution is preferred.
+netprotocols = { path = "../NETProtocols", editable = true }
 
 [build-system]
-requires = ["poetry-core>=1.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/packet_sniffer"]
+
+[tool.ruff]
+line-length = 80
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "C4", "SIM", "RUF"]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+files = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.coverage.run]
+source = ["packet_sniffer"]
+
+[tool.coverage.report]
+show_missing = true

@@ -1,0 +1,181 @@
+"""Renderers for decoded frames.
+
+``OutputToScreen`` dispatches on the *type* of each decoded layer via
+``singledispatchmethod`` and always receives the whole
+:class:`DecodedFrame`, so renderers can reach for context beyond their
+own layer (the ICMP lines show the enclosing IP addresses, for
+example). Unknown layers and malformed frames render diagnostics
+instead of raising: display helpers must never kill a capture.
+"""
+
+from __future__ import annotations
+
+import sys
+import time
+from abc import ABC, abstractmethod
+from functools import singledispatchmethod
+from typing import IO
+
+from netprotocols import (
+    ARP,
+    TCP,
+    UDP,
+    Ethernet,
+    ICMPv4,
+    ICMPv6,
+    IPv4,
+    IPv6,
+    Protocol,
+)
+
+from packet_sniffer.frame import DecodedFrame
+
+__all__ = ["Output", "OutputToScreen"]
+
+_I = " " * 4  # base indentation for layer sections
+_II = " " * 8  # indentation for field detail lines
+
+
+class Output(ABC):
+    """Interface for consumers of decoded frames (screen, file, ...)."""
+
+    @abstractmethod
+    def update(self, frame: DecodedFrame) -> None:
+        """Process one decoded frame."""
+
+
+class OutputToScreen(Output):
+    """Render decoded frames as indented text, one block per frame.
+
+    :param display_payload: Also render the frame's raw payload,
+        decoded as text with undecodable bytes ignored.
+    :param stream: Destination stream; defaults to stdout.
+    """
+
+    def __init__(
+        self, *, display_payload: bool, stream: IO[str] | None = None
+    ) -> None:
+        self._display_payload = display_payload
+        self._stream = stream if stream is not None else sys.stdout
+
+    def _print(self, text: str) -> None:
+        print(text, file=self._stream)
+
+    def update(self, frame: DecodedFrame) -> None:
+        local_time = time.strftime("%H:%M:%S", time.localtime(frame.timestamp))
+        interface = frame.interface or "all"
+        self._print(
+            f"[>] Frame #{frame.number} at {local_time} "
+            f"({interface}, {frame.length} bytes)"
+        )
+        for layer in frame.layers:
+            self._render(layer, frame)
+        if frame.error is not None:
+            self._print(f"{_I}[!] Malformed header: {frame.error}")
+        if frame.truncated:
+            self._print(
+                f"{_I}[!] Truncated: the IP datagram declares more bytes "
+                f"than were captured"
+            )
+        if self._display_payload and frame.payload:
+            text = frame.payload.decode(errors="ignore")
+            self._print(f"{_I}[+] Payload ({len(frame.payload)} bytes):")
+            self._print(f"{_II}{text.replace(chr(10), chr(10) + _II)}")
+        self._print("")
+
+    @singledispatchmethod
+    def _render(self, layer: Protocol, frame: DecodedFrame) -> None:
+        self._print(f"{_I}[+] {type(layer).__name__} (no renderer)")
+
+    @_render.register
+    def _(self, layer: Ethernet, frame: DecodedFrame) -> None:
+        self._print(f"{_I}[+] Ethernet {layer.src} -> {layer.dst}")
+        self._print(f"{_II}EtherType: {layer.ethertype_name}")
+
+    @_render.register
+    def _(self, layer: ARP, frame: DecodedFrame) -> None:
+        if layer.oper == 1:
+            summary = f"who has {layer.tpa}? tell {layer.spa}"
+        else:
+            summary = f"{layer.spa} is at {layer.sha}"
+        self._print(f"{_I}[+] ARP {summary}")
+        self._print(
+            f"{_II}Operation: {layer.oper} ({layer.oper_name}) | "
+            f"Protocol Type: {layer.ptype_name} ({layer.ptype_hex_str})"
+        )
+        self._print(f"{_II}Sender: {layer.sha} / {layer.spa}")
+        self._print(f"{_II}Target: {layer.tha} / {layer.tpa}")
+
+    @_render.register
+    def _(self, layer: IPv4, frame: DecodedFrame) -> None:
+        self._print(f"{_I}[+] IPv4 {layer.src} -> {layer.dst}")
+        self._print(
+            f"{_II}TTL: {layer.ttl} | Flags: {layer.flags_name} | "
+            f"Total Length: {layer.total_length} | ID: {layer.identification}"
+        )
+        self._print(
+            f"{_II}Protocol: {layer.protocol_name} | "
+            f"Checksum: {layer.checksum_hex_str}"
+            + (
+                f" | Options: {len(layer.options)} bytes"
+                if layer.options
+                else ""
+            )
+        )
+
+    @_render.register
+    def _(self, layer: IPv6, frame: DecodedFrame) -> None:
+        self._print(f"{_I}[+] IPv6 {layer.src} -> {layer.dst}")
+        self._print(
+            f"{_II}Hop Limit: {layer.hop_limit} | "
+            f"Traffic Class: {layer.traffic_class_hex_str} | "
+            f"Flow Label: {layer.flow_label_hex_str}"
+        )
+        self._print(
+            f"{_II}Payload Length: {layer.payload_length} | "
+            f"Next Header: {layer.next_header_name}"
+        )
+
+    @_render.register
+    def _(self, layer: ICMPv4, frame: DecodedFrame) -> None:
+        self._render_icmp(layer, frame, version=4)
+
+    @_render.register
+    def _(self, layer: ICMPv6, frame: DecodedFrame) -> None:
+        self._render_icmp(layer, frame, version=6)
+
+    def _render_icmp(
+        self, layer: ICMPv4 | ICMPv6, frame: DecodedFrame, *, version: int
+    ) -> None:
+        ip: IPv4 | IPv6 | None
+        ip = frame.layer(IPv4) if version == 4 else frame.layer(IPv6)
+        route = f" {ip.src} -> {ip.dst}" if ip is not None else ""
+        self._print(f"{_I}[+] ICMPv{version}{route}")
+        self._print(
+            f"{_II}Type: {layer.type} ({layer.type_name}) | "
+            f"Code: {layer.code} | Checksum: {layer.checksum_hex_str}"
+        )
+
+    @_render.register
+    def _(self, layer: TCP, frame: DecodedFrame) -> None:
+        self._print(f"{_I}[+] TCP {layer.src_port} -> {layer.dst_port}")
+        self._print(
+            f"{_II}Flags: {layer.flags_hex_str} ({layer.flags_str}) | "
+            f"Seq: {layer.seq} | Ack: {layer.ack}"
+        )
+        self._print(
+            f"{_II}Window: {layer.window} | "
+            f"Checksum: {layer.checksum_hex_str}"
+            + (
+                f" | Options: {len(layer.options)} bytes"
+                if layer.options
+                else ""
+            )
+        )
+
+    @_render.register
+    def _(self, layer: UDP, frame: DecodedFrame) -> None:
+        self._print(f"{_I}[+] UDP {layer.src_port} -> {layer.dst_port}")
+        self._print(
+            f"{_II}Length: {layer.length} | Checksum: {layer.checksum_hex_str}"
+        )
