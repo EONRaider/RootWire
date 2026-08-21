@@ -37,11 +37,6 @@ dev = [
     "ruff>=0.9",
 ]
 
-[tool.uv.sources]
-# Development resolves the library from the sibling checkout; releases
-# use the published netprotocols from PyPI (>=1.0). Remove this table
-# once 1.0.0 is on PyPI if a pure-registry resolution is preferred.
-netprotocols = { path = "../NETProtocols", editable = true }
 
 [build-system]
 requires = ["hatchling"]

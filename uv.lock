@@ -354,16 +354,10 @@ wheels = [
 [[package]]
 name = "netprotocols"
 version = "1.0.0"
-source = { editable = "../NETProtocols" }
-
-[package.metadata]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "mypy", specifier = ">=1.14" },
-    { name = "pytest", specifier = ">=8.3" },
-    { name = "pytest-cov", specifier = ">=6.0" },
-    { name = "ruff", specifier = ">=0.9" },
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/24/8f/f96154ba289fd84cb8bb3082cf16363f1b30bec9e090ded7fdb9cfcd9d99/netprotocols-1.0.0.tar.gz", hash = "sha256:71448d1c15b53d4b48a37fce1e00773362d272f748b43e749304ca303527d932", size = 59325, upload-time = "2026-08-21T22:02:16.028Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1b/ea/8962b2d99dc62dfa12293f29440729e2f46cddf56475aad9e10d71115a70/netprotocols-1.0.0-py3-none-any.whl", hash = "sha256:5d7509340a2c2701371cdcf71a34a945e7d5fe1f8a53d6a8542b31187e9fcde8", size = 21109, upload-time = "2026-08-21T22:02:14.964Z" },
 ]
 
 [[package]]
@@ -392,7 +386,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "netprotocols", editable = "../NETProtocols" }]
+requires-dist = [{ name = "netprotocols", specifier = ">=1.0,<2" }]
 
 [package.metadata.requires-dev]
 dev = [
