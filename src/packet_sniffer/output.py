@@ -25,6 +25,10 @@ from netprotocols import (
     ICMPv6,
     IPv4,
     IPv6,
+    IPv6DestinationOptions,
+    IPv6Fragment,
+    IPv6HopByHopOptions,
+    IPv6Routing,
     Protocol,
 )
 
@@ -133,6 +137,48 @@ class OutputToScreen(Output):
         )
         self._print(
             f"{_II}Payload Length: {layer.payload_length} | "
+            f"Next Header: {layer.next_header_name}"
+        )
+
+    @_render.register
+    def _(self, layer: IPv6HopByHopOptions, frame: DecodedFrame) -> None:
+        self._render_options_header(layer, "IPv6 Hop-by-Hop Options")
+
+    @_render.register
+    def _(self, layer: IPv6DestinationOptions, frame: DecodedFrame) -> None:
+        self._render_options_header(layer, "IPv6 Destination Options")
+
+    def _render_options_header(
+        self,
+        layer: IPv6DestinationOptions | IPv6HopByHopOptions,
+        title: str,
+    ) -> None:
+        self._print(f"{_I}[+] {title}")
+        self._print(
+            f"{_II}Length: {layer.header_len} bytes | "
+            f"Next Header: {layer.next_header_name}"
+        )
+
+    @_render.register
+    def _(self, layer: IPv6Routing, frame: DecodedFrame) -> None:
+        self._print(f"{_I}[+] IPv6 Routing (type {layer.routing_type})")
+        self._print(
+            f"{_II}Segments Left: {layer.segments_left} | "
+            f"Length: {layer.header_len} bytes | "
+            f"Next Header: {layer.next_header_name}"
+        )
+
+    @_render.register
+    def _(self, layer: IPv6Fragment, frame: DecodedFrame) -> None:
+        position = (
+            "first fragment"
+            if layer.fragment_offset == 0
+            else f"fragment at offset {layer.fragment_offset * 8}"
+        )
+        self._print(f"{_I}[+] IPv6 Fragment ({position})")
+        self._print(
+            f"{_II}ID: {layer.identification} | "
+            f"More Fragments: {'yes' if layer.m_flag else 'no'} | "
             f"Next Header: {layer.next_header_name}"
         )
 

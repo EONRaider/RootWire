@@ -46,3 +46,24 @@ class TestOutputToScreen:
         truncated_text = render(truncated_frame)
         assert "Malformed header: TCP" in truncated_text
         assert "Truncated" in truncated_text
+
+
+class TestExtensionHeaderRendering:
+    def test_mld_frame_renders_hop_by_hop(self, request):
+        from conftest import FIXTURES, read_pcap
+
+        frame = read_pcap(FIXTURES / "ipv6_mld.pcap")[0]
+        text = render(frame)
+        assert "IPv6 Hop-by-Hop Options" in text
+        assert "Next Header: IPv6-ICMP" in text
+        assert "ICMPv6" in text
+
+    def test_fragment_positions_are_labeled(self):
+        from conftest import FIXTURES, read_pcap
+
+        texts = [
+            render(frame)
+            for frame in read_pcap(FIXTURES / "ipv6_fragments.pcap")
+        ]
+        assert any("first fragment" in text for text in texts)
+        assert any("fragment at offset" in text for text in texts)
