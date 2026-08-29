@@ -353,11 +353,11 @@ wheels = [
 
 [[package]]
 name = "netprotocols"
-version = "1.0.0"
+version = "1.0.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/24/8f/f96154ba289fd84cb8bb3082cf16363f1b30bec9e090ded7fdb9cfcd9d99/netprotocols-1.0.0.tar.gz", hash = "sha256:71448d1c15b53d4b48a37fce1e00773362d272f748b43e749304ca303527d932", size = 59325, upload-time = "2026-08-21T22:02:16.028Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/da/d7/b11bde3e653008826150d55656f4ac64151ac087d2360ff8b4e1f9205a29/netprotocols-1.0.1.tar.gz", hash = "sha256:3f719a6bef85983e273eff71b449a645618878b057d378b97b7a49208efabdc9", size = 73170, upload-time = "2026-08-29T19:08:44.983Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1b/ea/8962b2d99dc62dfa12293f29440729e2f46cddf56475aad9e10d71115a70/netprotocols-1.0.0-py3-none-any.whl", hash = "sha256:5d7509340a2c2701371cdcf71a34a945e7d5fe1f8a53d6a8542b31187e9fcde8", size = 21109, upload-time = "2026-08-21T22:02:14.964Z" },
+    { url = "https://files.pythonhosted.org/packages/69/e5/405467d6ff9857ad8f05f4b17694c29a5b92721b9962ae2d1082fc3e19a8/netprotocols-1.0.1-py3-none-any.whl", hash = "sha256:4a09dc0feb7997ff62b97ef6282dee1cbf1915568297534123736f74bab35da9", size = 21254, upload-time = "2026-08-29T19:08:44.066Z" },
 ]
 
 [[package]]
@@ -386,7 +386,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "netprotocols", specifier = ">=1.0,<2" }]
+requires-dist = [{ name = "netprotocols", specifier = ">=1.0.1,<2" }]
 
 [package.metadata.requires-dev]
 dev = [
