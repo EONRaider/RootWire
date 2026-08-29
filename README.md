@@ -48,11 +48,25 @@ uv sync
 ## Usage
 
 ```
-packet-sniffer [-h] [-i INTERFACE] [-d] [--version]
+packet-sniffer [-h] [-i INTERFACE] [-r FILE] [-w FILE] [--json] [-d] [--version]
 
 options:
   -i, --interface   interface to capture frames from (default: all interfaces)
-  -d, --data        also display each frame's raw payload
+  -r, --read FILE   replay frames from a classic pcap file instead of live
+                    capture (no privileges required)
+  -w, --write FILE  also write every captured frame to a classic pcap file
+  --json            one NDJSON object per frame on stdout (banner and
+                    statistics stay on stderr): pipe straight into jq
+  -d, --data        also display each frame's raw payload (ignored with --json)
+```
+
+Capture statistics (frames, bytes, frames/s, per-protocol tallies) are
+reported on stderr when the capture ends. Some favorite combinations:
+
+```
+sudo packet-sniffer -i eth0 -w session.pcap   # capture and keep the evidence
+packet-sniffer -r session.pcap                # inspect it later, no root
+packet-sniffer -r session.pcap --json | jq .  # machine-readable analysis
 ```
 
 Capturing requires a raw socket, which on Linux means either root:
@@ -84,9 +98,8 @@ uv run pytest
 ## Roadmap
 
 - BPF filtering (kernel-side capture filters)
-- pcap/pcapng file output and replay-from-pcap input
-- JSON/NDJSON output for piping into other tools
-- Kernel timestamps (`SO_TIMESTAMPNS`)
+- Kernel timestamps (`SO_TIMESTAMPNS`) and SIGTERM-clean service use
+- Checksum verification rendering
 - A new name — watch this space
 
 ## Legal Disclaimer

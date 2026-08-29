@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.1.0] - 2026-08-29
+
+### Added
+- **pcap output and replay**: `-w FILE` writes every captured frame
+  byte-exactly to a classic pcap file (opens in Wireshark/tcpdump);
+  `-r FILE` replays a pcap through the whole decode/render pipeline —
+  no privileges required. The reader handles both byte orders and
+  nanosecond-precision files, and rejects non-Ethernet linktypes.
+- **NDJSON output**: `--json` emits one JSON object per frame on
+  stdout with nothing else mixed in (banner, statistics, and the abort
+  notice live on stderr), so output pipes cleanly into `jq` and
+  friends. `-d` is ignored in JSON mode.
+- **Capture statistics** on exit and at replay end-of-file: frames,
+  bytes, duration, frames/s, malformed and truncated counts, and
+  per-protocol tallies bucketed by innermost decoded layer.
+- **IPv6 extension-header rendering** (netprotocols 1.1): MLD traffic
+  now renders as Ethernet / IPv6 / Hop-by-Hop Options / ICMPv6, and
+  fragments are labeled first/at-offset.
+
+### Changed
+- The decode chain is capped at 16 layers per frame (diagnosed on the
+  frame, capture continues): a crafted frame of back-to-back 8-byte
+  extension headers could otherwise decode thousands of layer objects.
+- Dependency floor raised to `netprotocols>=1.1,<2`.
+
 ## [4.0.0] - 2026-08-21
 
 Complete rebuild on netprotocols 1.0. The CLI gains proper entry
