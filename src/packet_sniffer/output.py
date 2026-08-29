@@ -1,4 +1,4 @@
-"""Renderers for decoded frames.
+"""Renderers and other consumers of decoded frames.
 
 ``OutputToScreen`` dispatches on the *type* of each decoded layer via
 ``singledispatchmethod`` and always receives the whole
@@ -10,11 +10,14 @@ instead of raising: display helpers must never kill a capture.
 
 from __future__ import annotations
 
+import dataclasses
+import json
 import sys
 import time
 from abc import ABC, abstractmethod
+from collections import Counter
 from functools import singledispatchmethod
-from typing import IO
+from typing import IO, Any, cast
 
 from netprotocols import (
     ARP,
@@ -35,7 +38,13 @@ from netprotocols import (
 from packet_sniffer.frame import DecodedFrame
 from packet_sniffer.pcap import PcapWriter
 
-__all__ = ["Output", "OutputToPcap", "OutputToScreen"]
+__all__ = [
+    "Output",
+    "OutputToNDJSON",
+    "OutputToPcap",
+    "OutputToScreen",
+    "StatsCollector",
+]
 
 _I = " " * 4  # base indentation for layer sections
 _II = " " * 8  # indentation for field detail lines
@@ -250,3 +259,113 @@ class OutputToPcap(Output):
 
     def close(self) -> None:
         self._writer.close()
+
+
+def _json_safe(value: Any) -> Any:
+    return value.hex() if isinstance(value, bytes) else value
+
+
+class OutputToNDJSON(Output):
+    """Emit one JSON object per frame, newline-delimited.
+
+    Layer fields come straight from the dataclasses (bytes values
+    hex-encoded); the raw payload is deliberately omitted — its length
+    is reported as ``payload_len``. Lines are flushed as they are
+    written so the output pipes cleanly into consumers like ``jq``.
+
+    :param stream: Destination stream; defaults to stdout.
+    """
+
+    def __init__(self, stream: IO[str] | None = None) -> None:
+        self._stream = stream if stream is not None else sys.stdout
+
+    def update(self, frame: DecodedFrame) -> None:
+        record = {
+            "number": frame.number,
+            "timestamp": frame.timestamp,
+            "interface": frame.interface,
+            "length": frame.length,
+            "truncated": frame.truncated,
+            "error": frame.error,
+            "payload_len": len(frame.payload),
+            "layers": [
+                {
+                    "type": type(layer).__name__,
+                    **{
+                        key: _json_safe(value)
+                        # Every concrete Protocol is a dataclass; the
+                        # ABC itself is not, hence the cast.
+                        for key, value in dataclasses.asdict(
+                            cast(Any, layer)
+                        ).items()
+                    },
+                }
+                for layer in frame.layers
+            ],
+        }
+        print(
+            json.dumps(record, separators=(",", ":")),
+            file=self._stream,
+            flush=True,
+        )
+
+
+#: Innermost-layer classes counted by name in the statistics report.
+_STATS_BUCKETS = (TCP, UDP, ICMPv4, ICMPv6, ARP)
+
+
+class StatsCollector(Output):
+    """Accumulate capture statistics; render them with :meth:`report`.
+
+    The per-protocol tally buckets each frame by its innermost decoded
+    layer among TCP/UDP/ICMPv4/ICMPv6/ARP — unambiguous even when a
+    chain ends at an extension header or a non-first fragment, which
+    count as ``other``.
+    """
+
+    def __init__(self) -> None:
+        self._started = time.monotonic()
+        self._frames = 0
+        self._bytes = 0
+        self._malformed = 0
+        self._truncated = 0
+        self._buckets: Counter[str] = Counter()
+
+    def update(self, frame: DecodedFrame) -> None:
+        self._frames += 1
+        self._bytes += frame.length
+        if frame.error is not None:
+            self._malformed += 1
+        if frame.truncated:
+            self._truncated += 1
+        for layer in reversed(frame.layers):
+            if isinstance(layer, _STATS_BUCKETS):
+                self._buckets[type(layer).__name__] += 1
+                break
+        else:
+            self._buckets["other"] += 1
+
+    def report(self, stream: IO[str] | None = None) -> None:
+        """Write the capture summary (to stderr by default)."""
+        stream = stream if stream is not None else sys.stderr
+        duration = time.monotonic() - self._started
+        rate = self._frames / duration if duration > 0 else 0.0
+        tallies = ", ".join(
+            f"{name}: {count}"
+            for name, count in sorted(
+                self._buckets.items(), key=lambda item: -item[1]
+            )
+        )
+        print(
+            f"[=] {self._frames} frames, {self._bytes:,} bytes in "
+            f"{duration:.1f}s ({rate:,.0f} frames/s)",
+            file=stream,
+        )
+        if tallies:
+            print(f"[=] {tallies}", file=stream)
+        if self._malformed or self._truncated:
+            print(
+                f"[=] malformed: {self._malformed}, "
+                f"truncated: {self._truncated}",
+                file=stream,
+            )
