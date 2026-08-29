@@ -48,8 +48,12 @@ class Output(ABC):
     def update(self, frame: DecodedFrame) -> None:
         """Process one decoded frame."""
 
-    def close(self) -> None:
-        """Release resources at end of capture; default: nothing."""
+    def close(self) -> None:  # noqa: B027 -- optional hook, not abstract
+        """Release resources at end of capture; default: nothing.
+
+        Deliberately not abstract: most outputs hold no resources, and
+        forcing every renderer to write a no-op close would be noise.
+        """
 
 
 class OutputToScreen(Output):
