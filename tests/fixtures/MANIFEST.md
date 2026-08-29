@@ -26,7 +26,7 @@ scenarios. Addresses are as-captured from the capture host's network.
 | `udp_dns.pcap` | 4 | DNS responses (src port 53) over IPv4 (1) and IPv6 (3), with payloads |
 
 Consumed by `tests/test_corpus.py` (corpus-wide invariants +
-representative field asserts), mirrored into Packet-Sniffer's test
+representative field asserts), mirrored into RootWire's test
 suite, and later reused as fuzz seeds and pcap-replay goldens.
 
 ## Capture notes

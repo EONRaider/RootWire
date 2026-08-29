@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from netprotocols import Ethernet, IPv4, IPv6, Protocol, ProtocolError
 
-from packet_sniffer.frame import DecodedFrame
+from rootwire.frame import DecodedFrame
 
 __all__ = ["decode_frame"]
 

@@ -35,8 +35,8 @@ from netprotocols import (
     Protocol,
 )
 
-from packet_sniffer.frame import DecodedFrame
-from packet_sniffer.pcap import PcapWriter
+from rootwire.frame import DecodedFrame
+from rootwire.pcap import PcapWriter
 
 __all__ = [
     "Output",

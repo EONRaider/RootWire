@@ -6,10 +6,10 @@ import struct
 import pytest
 
 from conftest import FIXTURES, corpus_frames
-from packet_sniffer import cli
-from packet_sniffer.decoder import decode_frame
-from packet_sniffer.output import Output, OutputToPcap
-from packet_sniffer.pcap import PcapWriter, read_pcap
+from rootwire import cli
+from rootwire.decoder import decode_frame
+from rootwire.output import Output, OutputToPcap
+from rootwire.pcap import PcapWriter, read_pcap
 
 FRAMES = [
     b"\xff" * 6 + b"\x00" * 6 + b"\x08\x06" + b"arp-ish",

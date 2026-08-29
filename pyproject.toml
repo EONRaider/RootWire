@@ -1,7 +1,7 @@
 [project]
-name = "packet-sniffer"
-version = "4.1.0"
-description = "A network traffic monitor that decodes raw Ethernet frames"
+name = "rootwire"
+version = "5.0.0"
+description = "RootWire: a network traffic monitor that decodes raw Ethernet frames"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
 license-files = ["LICENSE"]
@@ -22,12 +22,12 @@ classifiers = [
 dependencies = ["netprotocols>=1.1,<2"]
 
 [project.scripts]
-packet-sniffer = "packet_sniffer.cli:main"
+rootwire = "rootwire.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/EONRaider/Packet-Sniffer"
-Repository = "https://github.com/EONRaider/Packet-Sniffer"
-Changelog = "https://github.com/EONRaider/Packet-Sniffer/blob/master/CHANGELOG.md"
+Homepage = "https://github.com/EONRaider/RootWire"
+Repository = "https://github.com/EONRaider/RootWire"
+Changelog = "https://github.com/EONRaider/RootWire/blob/master/CHANGELOG.md"
 
 [dependency-groups]
 dev = [
@@ -43,7 +43,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/packet_sniffer"]
+packages = ["src/rootwire"]
 
 [tool.ruff]
 line-length = 80
@@ -63,7 +63,7 @@ testpaths = ["tests"]
 addopts = "-q"
 
 [tool.coverage.run]
-source = ["packet_sniffer"]
+source = ["rootwire"]
 
 [tool.coverage.report]
 show_missing = true

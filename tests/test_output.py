@@ -1,7 +1,7 @@
 import io
 
-from packet_sniffer.decoder import decode_frame
-from packet_sniffer.output import OutputToScreen
+from rootwire.decoder import decode_frame
+from rootwire.output import OutputToScreen
 
 
 def render(data: bytes, *, display_payload: bool = False) -> str:

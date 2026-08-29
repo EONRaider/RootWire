@@ -13,9 +13,9 @@ import argparse
 import sys
 from collections.abc import Iterator, Sequence
 
-from packet_sniffer import __version__
-from packet_sniffer.decoder import decode_frame
-from packet_sniffer.output import (
+from rootwire import __version__
+from rootwire.decoder import decode_frame
+from rootwire.output import (
     Output,
     OutputToNDJSON,
     OutputToPcap,
@@ -28,7 +28,7 @@ __all__ = ["build_parser", "main"]
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="packet-sniffer",
+        prog="rootwire",
         description=(
             "Monitor network traffic: capture Ethernet frames from an "
             "interface (or replay them from a pcap file), decode their "
@@ -113,18 +113,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     outputs.append(stats)
 
     if args.read is not None:
-        from packet_sniffer.pcap import read_pcap
+        from rootwire.pcap import read_pcap
 
         source = read_pcap(args.read)
         interface = args.read
     else:
-        from packet_sniffer.capture import capture  # Linux-only import
+        from rootwire.capture import capture  # Linux-only import
 
         source = capture(args.interface)
         interface = args.interface
 
     print(
-        "[>>>] Packet Sniffer initialized. "
+        "[>>>] RootWire initialized. "
         + (
             f"Replaying {args.read}..."
             if args.read
