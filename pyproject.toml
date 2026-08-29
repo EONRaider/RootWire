@@ -19,7 +19,7 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Topic :: System :: Networking :: Monitoring",
 ]
-dependencies = ["netprotocols>=1.0,<2"]
+dependencies = ["netprotocols>=1.0.1,<2"]
 
 [project.scripts]
 packet-sniffer = "packet_sniffer.cli:main"
