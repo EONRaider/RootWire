@@ -34,6 +34,9 @@ class DecodedFrame:
     :param error: Diagnostic message when the decode chain aborted on a
         malformed header, else ``None``. The layers decoded before the
         failure are preserved.
+    :param raw: The exact captured bytes of the whole frame — the same
+        object the decoder received, so keeping it costs no copy. This
+        is what pcap output writes.
     """
 
     number: int
@@ -44,6 +47,7 @@ class DecodedFrame:
     payload: bytes
     truncated: bool = False
     error: str | None = None
+    raw: bytes = b""
 
     def layer(self, protocol: type[_P]) -> _P | None:
         """The first decoded layer of the given class, or ``None``.

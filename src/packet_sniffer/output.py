@@ -33,8 +33,9 @@ from netprotocols import (
 )
 
 from packet_sniffer.frame import DecodedFrame
+from packet_sniffer.pcap import PcapWriter
 
-__all__ = ["Output", "OutputToScreen"]
+__all__ = ["Output", "OutputToPcap", "OutputToScreen"]
 
 _I = " " * 4  # base indentation for layer sections
 _II = " " * 8  # indentation for field detail lines
@@ -46,6 +47,9 @@ class Output(ABC):
     @abstractmethod
     def update(self, frame: DecodedFrame) -> None:
         """Process one decoded frame."""
+
+    def close(self) -> None:
+        """Release resources at end of capture; default: nothing."""
 
 
 class OutputToScreen(Output):
@@ -225,3 +229,20 @@ class OutputToScreen(Output):
         self._print(
             f"{_II}Length: {layer.length} | Checksum: {layer.checksum_hex_str}"
         )
+
+
+class OutputToPcap(Output):
+    """Write every frame's exact captured bytes to a classic pcap file.
+
+    :param path: Destination file, created (or overwritten) on
+        construction.
+    """
+
+    def __init__(self, path: str) -> None:
+        self._writer = PcapWriter(path)
+
+    def update(self, frame: DecodedFrame) -> None:
+        self._writer.write(frame.raw, frame.timestamp)
+
+    def close(self) -> None:
+        self._writer.close()
