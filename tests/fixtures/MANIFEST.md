@@ -1,11 +1,13 @@
 # Real-capture fixture corpus
 
-Captured 2026-08-29 with `scripts/capture_fixtures.sh` (tcpdump on `lo`
-and the default interface) and validated by
-`scripts/check_fixtures.py`: **every frame's checksums verify
-internally** (IPv4 header, TCP/UDP pseudo-header, ICMPv4/v6). Frames
-used as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 56 frames across 10
+Captured 2026-08-29 with `scripts/capture_fixtures.sh` and
+`scripts/capture_fixtures_supplement.sh` (tcpdump on `lo` and the
+default interface) and validated by `scripts/check_fixtures.py`:
+**every frame's checksums verify internally** (IPv4 header, TCP/UDP
+pseudo-header, ICMPv4/v6; fragment slices carry no verifiable
+upper-layer checksum — it spans the reassembled datagram). Frames used
+as checksum ground truth were captured **inbound only** — outbound
+frames routinely leave checksums to NIC offload. 65 frames across 12
 scenarios. Addresses are as-captured from the capture host's network.
 
 | File | Frames | Contents |
@@ -16,6 +18,8 @@ scenarios. Addresses are as-captured from the capture host's network.
 | `icmpv4_ttl_exceeded.pcap` | 3 | Time Exceeded (type 11) errors from intermediate hops |
 | `icmpv6_echo_lo.pcap` | 6 | Loopback ICMPv6 echo pairs (types 128/129) |
 | `ipv4_fragments.pcap` | 5 | Fragmented 2028-byte echo replies: first fragments (offset 0, MF) + non-first fragments |
+| `ipv6_fragments.pcap` | 5 | Fragmented 2048-byte ICMPv6 echo replies: first fragments (offset 0) + non-first fragments behind fragment headers (next_header 44) |
+| `ipv6_mld.pcap` | 4 | MLD reports behind hop-by-hop extension headers (next_header 0) — provoked by multicast group join/leave |
 | `ipv6_ndp_mld.pcap` | 10 | NDP Neighbor Solicitation/Advertisement (135/136) + echo 128/129 |
 | `tcp_http.pcap` | 4 | Inbound HTTP-port segments over IPv6: ACK, PSH-ACK ×2, FIN-ACK — all carrying options |
 | `tcp_https.pcap` | 12 | Inbound HTTPS segments over IPv4 (7) and IPv6 (5): ACK/PSH-ACK with options |
@@ -25,14 +29,12 @@ Consumed by `tests/test_corpus.py` (corpus-wide invariants +
 representative field asserts), mirrored into Packet-Sniffer's test
 suite, and later reused as fuzz seeds and pcap-replay goldens.
 
-## Known gaps (pending `scripts/capture_fixtures_supplement.sh`)
+## Capture notes
 
-- **MLD behind a hop-by-hop extension header** — the original capture
-  filter used BPF `icmp6`, which matches only `next_header == 58`
-  *directly*; MLD hides behind hop-by-hop (`next_header == 0`) and was
-  filtered out. The supplement captures `ip6 proto 0`.
-- **IPv6 fragment pair** — no fragmented IPv6 traffic was generated in
-  the first run; the supplement sends an oversized `ping -6`.
+- The MLD scenario needed a second pass: the original filter used BPF
+  `icmp6`, which matches only `next_header == 58` *directly* — it
+  structurally cannot see ICMPv6 behind a hop-by-hop header. The
+  supplement captures `ip6 proto 0` instead.
 - No inbound SYN-ACK was caught (handshake timing vs. capture start);
   options-bearing segments are otherwise abundant.
 - Unknown-EtherType frames are exercised by deliberately synthetic
