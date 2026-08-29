@@ -2,7 +2,7 @@
 
 from _common import run
 
-from packet_sniffer.decoder import decode_frame
+from rootwire.decoder import decode_frame
 
 
 def main() -> None:

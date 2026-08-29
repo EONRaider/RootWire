@@ -12,8 +12,8 @@ import pytest
 from netprotocols import IPv4
 
 from conftest import corpus_frames
-from packet_sniffer.decoder import decode_frame
-from packet_sniffer.output import OutputToScreen
+from rootwire.decoder import decode_frame
+from rootwire.output import OutputToScreen
 
 CORPUS = corpus_frames()
 

@@ -4,9 +4,9 @@ import io
 import json
 
 from conftest import FIXTURES
-from packet_sniffer import cli
-from packet_sniffer.decoder import decode_frame
-from packet_sniffer.output import OutputToNDJSON, StatsCollector
+from rootwire import cli
+from rootwire.decoder import decode_frame
+from rootwire.output import OutputToNDJSON, StatsCollector
 
 SCHEMA_KEYS = {
     "number",
@@ -112,7 +112,7 @@ class TestJSONModePurity:
         assert "frames/s" in captured.err  # stats on stderr
 
     def test_json_composes_with_write(self, tmp_path, capsys):
-        from packet_sniffer.pcap import read_pcap as replay
+        from rootwire.pcap import read_pcap as replay
 
         source = FIXTURES / "arp_exchange.pcap"
         copy = tmp_path / "copy.pcap"

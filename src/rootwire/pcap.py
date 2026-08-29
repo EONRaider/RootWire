@@ -10,7 +10,7 @@ reads.
 The reader accepts both byte orders and the nanosecond-precision magic
 (``0xA1B23C4D``), validates that the file carries Ethernet frames
 before handing them to an Ethernet decoder, and deliberately has the
-same shape as :func:`packet_sniffer.capture.capture` — so replaying a
+same shape as :func:`rootwire.capture.capture` — so replaying a
 file is a drop-in frame source for the whole pipeline, no root
 required.
 

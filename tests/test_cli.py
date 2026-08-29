@@ -1,7 +1,7 @@
 import pytest
 
-from packet_sniffer import __version__
-from packet_sniffer.cli import build_parser
+from rootwire import __version__
+from rootwire.cli import build_parser
 
 
 class TestCLI:

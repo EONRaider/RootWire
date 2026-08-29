@@ -18,7 +18,7 @@ from _common import run
 
 
 class OldDecoder:
-    """The decode chain of packet_sniffer/core.py at v2.1.0."""
+    """The decode chain of rootwire/core.py at v2.1.0."""
 
     def __init__(self) -> None:
         self.data = None

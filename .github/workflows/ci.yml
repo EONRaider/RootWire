@@ -36,4 +36,4 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: ${{ matrix.python-version }}
-      - run: uv run pytest --cov=packet_sniffer --cov-report=term
+      - run: uv run pytest --cov=rootwire --cov-report=term

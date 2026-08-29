@@ -1,14 +1,16 @@
-# Packet Sniffer
+# RootWire
 
-[![CI](https://github.com/EONRaider/Packet-Sniffer/actions/workflows/ci.yml/badge.svg)](https://github.com/EONRaider/Packet-Sniffer/actions/workflows/ci.yml)
+[![CI](https://github.com/EONRaider/RootWire/actions/workflows/ci.yml/badge.svg)](https://github.com/EONRaider/RootWire/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/rootwire)](https://pypi.org/project/rootwire/)
 ![Python Version](https://img.shields.io/badge/python-3.12%2B-blue?logo=python)
 ![OS](https://img.shields.io/badge/OS-GNU%2FLinux-red?logo=linux)
-[![License](https://img.shields.io/github/license/EONRaider/Packet-Sniffer)](LICENSE)
+[![License](https://img.shields.io/github/license/EONRaider/RootWire)](LICENSE)
 
-A network traffic monitor for GNU/Linux. Frames are captured from a
-network interface with a raw socket, decoded layer by layer with the
+A network traffic monitor for GNU/Linux — *formerly known as
+Packet-Sniffer*. Frames are captured from a network interface with a
+raw socket, decoded layer by layer with the
 [NETProtocols](https://github.com/EONRaider/NETProtocols) library, and
-rendered on screen as they arrive:
+rendered live, written to pcap, or streamed as JSON:
 
 ```
 [>] Frame #4 at 15:42:07 (wlan0, 74 bytes)
@@ -22,33 +24,32 @@ rendered on screen as they arrive:
         Window: 64240 | Checksum: 0x2008 | Options: 20 bytes
 ```
 
-Decoding is options-aware (IPv4 IHL and TCP data offset are honored),
-malformed or truncated frames are diagnosed instead of crashing the
-capture, and unknown protocols end the decode chain gracefully — the
-capture survives whatever the network delivers.
+The decoder covers Ethernet, ARP, IPv4 (options and fragments), IPv6
+**including extension headers** (an MLD report renders its full
+Hop-by-Hop chain), ICMPv4/v6, TCP (options-aware payload offsets) and
+UDP. Malformed or truncated frames are diagnosed instead of crashing
+the capture, unknown protocols end the chain gracefully, and a
+16-layer cap keeps crafted extension-header stacks from amplifying —
+the capture survives whatever the network delivers.
 
 ## Installation
 
 ```
-pipx install "git+https://github.com/EONRaider/Packet-Sniffer.git"
+pipx install rootwire        # or: uv tool install rootwire
 ```
-
-(Or `uv tool install` with the same URL. The application is not
-published to PyPI under this name — that debut is reserved for its
-upcoming rename.)
 
 Or run from a clone with [uv](https://docs.astral.sh/uv/):
 
 ```
-git clone https://github.com/EONRaider/Packet-Sniffer.git
-cd Packet-Sniffer
+git clone https://github.com/EONRaider/RootWire.git
+cd RootWire
 uv sync
 ```
 
 ## Usage
 
 ```
-packet-sniffer [-h] [-i INTERFACE] [-r FILE] [-w FILE] [--json] [-d] [--version]
+rootwire [-h] [-i INTERFACE] [-r FILE] [-w FILE] [--json] [-d] [--version]
 
 options:
   -i, --interface   interface to capture frames from (default: all interfaces)
@@ -60,36 +61,35 @@ options:
   -d, --data        also display each frame's raw payload (ignored with --json)
 ```
 
-Capture statistics (frames, bytes, frames/s, per-protocol tallies) are
-reported on stderr when the capture ends. Some favorite combinations:
+Capture statistics — frames, bytes, frames/s, malformed/truncated
+counts, per-protocol tallies — are reported on stderr when the capture
+ends. Some favorite combinations:
 
 ```
-sudo packet-sniffer -i eth0 -w session.pcap   # capture and keep the evidence
-packet-sniffer -r session.pcap                # inspect it later, no root
-packet-sniffer -r session.pcap --json | jq .  # machine-readable analysis
+sudo rootwire -i eth0 -w session.pcap   # capture and keep the evidence
+rootwire -r session.pcap                # inspect it later, no root
+rootwire -r session.pcap --json | jq .  # machine-readable analysis
 ```
 
-Capturing requires a raw socket, which on Linux means either root:
-
-```
-sudo packet-sniffer -i eth0
-```
-
-...or granting the interpreter the `CAP_NET_RAW` capability. From a
-clone, run it as `sudo .venv/bin/python -m packet_sniffer`.
+Live capture needs a raw socket, which on Linux means root
+(`sudo rootwire -i eth0`) or granting the interpreter the
+`CAP_NET_RAW` capability. Replaying files with `-r` never needs
+privileges. From a clone, run it as `sudo .venv/bin/python -m rootwire`.
 
 ## How it works
 
-`capture.py` yields raw frames from an `AF_PACKET` socket;
-`decoder.py` walks each frame's protocol chain (Ethernet → ARP /
-IPv4 / IPv6 → ICMP / TCP / UDP) into an immutable `DecodedFrame`;
-renderers in `output.py` dispatch on the decoded layer types. The full
-tour — including why memory stays flat during long captures and how to
-add a renderer — is in [ARCHITECTURE.md](ARCHITECTURE.md).
+`capture.py` yields raw frames from an `AF_PACKET` socket (or
+`pcap.py` replays them from a file — the two sources are
+interchangeable); `decoder.py` walks each frame's protocol chain into
+an immutable `DecodedFrame`; outputs — the screen renderer, the NDJSON
+stream, the pcap writer, the statistics collector — consume every
+frame through one small `Output` interface. The full tour, including
+why memory stays flat during long captures and how to add an output,
+is in [ARCHITECTURE.md](ARCHITECTURE.md).
 
-Everything except the raw socket runs on any OS, so the test suite
-(decode and rendering over recorded frames) needs neither root nor
-Linux:
+Everything except the raw socket runs on any OS, so the test suite —
+which includes a 65-frame corpus of real captured traffic replayed
+through the whole pipeline — needs neither root nor Linux:
 
 ```
 uv run pytest
@@ -99,8 +99,7 @@ uv run pytest
 
 - BPF filtering (kernel-side capture filters)
 - Kernel timestamps (`SO_TIMESTAMPNS`) and SIGTERM-clean service use
-- Checksum verification rendering
-- A new name — watch this space
+- Checksum verification rendering (the library already computes them)
 
 ## Legal Disclaimer
 

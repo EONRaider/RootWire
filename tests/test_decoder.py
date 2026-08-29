@@ -1,6 +1,6 @@
 from netprotocols import ARP, TCP, UDP, Ethernet, ICMPv4, ICMPv6, IPv4, IPv6
 
-from packet_sniffer.decoder import decode_frame
+from rootwire.decoder import decode_frame
 
 
 def decode(data: bytes):

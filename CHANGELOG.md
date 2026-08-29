@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.0] - 2026-08-29
+
+**Packet-Sniffer is now RootWire.** Same engine, new name — and its
+first release on PyPI: `pip install rootwire`.
+
+### Changed
+- Distribution, module, and console script renamed: install
+  `rootwire`, import `rootwire`, run `rootwire` (or
+  `python -m rootwire`). The `packet-sniffer` command and the
+  `packet_sniffer` module are gone — this is the breaking change
+  behind the major version.
+- The GitHub repository is now
+  [EONRaider/RootWire](https://github.com/EONRaider/RootWire); links
+  to the old name redirect.
+- Releases publish to PyPI automatically on tags via trusted
+  publishing.
+
+*Why 5.0.0 and not 1.0.0*: the version continues the
+Packet-Sniffer lineage (this repository already carries tags up to
+`v4.1.0`, and a `v1.0.0` from 2021), and the rename itself is a
+breaking change.
+
 ## [4.1.0] - 2026-08-29
 
 ### Added
