@@ -17,6 +17,12 @@ __all__ = ["decode_frame"]
 
 _ETHERNET_HEADER_LEN = 14
 
+#: Upper bound on decoded layers per frame. Real stacks stay in single
+#: digits; a crafted 65,535-byte frame of back-to-back 8-byte
+#: extension headers would otherwise decode ~8,100 layer objects per
+#: frame -- a sniffer's input is adversarial by definition.
+_MAX_LAYERS = 16
+
 
 def _declared_length(layers: tuple[Protocol, ...]) -> int | None:
     """Total frame length implied by the IP layer, if one was decoded."""
@@ -52,6 +58,9 @@ def decode_frame(
     error: str | None = None
     protocol: type[Protocol] | None = Ethernet
     while protocol is not None:
+        if len(layers) >= _MAX_LAYERS:
+            error = f"decode chain exceeded {_MAX_LAYERS} layers"
+            break
         try:
             header = protocol.decode(view[cursor:])
         except ProtocolError as e:

@@ -87,3 +87,31 @@ class TestDecodeFrame:
         buffer[:] = bytes(len(buffer))
         assert frame.payload == payload_before
         assert frame.layer(UDP) == udp_before
+
+
+class TestChainHardening:
+    def test_layer_cap_stops_extension_header_amplification(self):
+        """A crafted frame of back-to-back hop-by-hop headers must stop
+        at the cap with a diagnostic, not decode thousands of layers."""
+        from netprotocols import Ethernet, IPv6
+
+        chain = b"\x00\x00\x01\x04\x00\x00\x00\x00" * 40
+        ip = IPv6(
+            version=6,
+            traffic_class=0,
+            flow_label=0,
+            payload_length=len(chain),
+            next_header=0,
+            hop_limit=64,
+            src="fe80::1",
+            dst="fe80::2",
+        )
+        eth = Ethernet(
+            dst="ff:ff:ff:ff:ff:ff",
+            src="00:07:0d:af:f4:54",
+            ethertype=0x86DD,
+        )
+        frame = decode(bytes(eth) + bytes(ip) + chain)
+        assert len(frame.layers) == 16
+        assert frame.error is not None
+        assert "exceeded 16 layers" in frame.error
