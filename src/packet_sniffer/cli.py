@@ -15,7 +15,13 @@ from collections.abc import Iterator, Sequence
 
 from packet_sniffer import __version__
 from packet_sniffer.decoder import decode_frame
-from packet_sniffer.output import Output, OutputToPcap, OutputToScreen
+from packet_sniffer.output import (
+    Output,
+    OutputToNDJSON,
+    OutputToPcap,
+    OutputToScreen,
+    StatsCollector,
+)
 
 __all__ = ["build_parser", "main"]
 
@@ -53,10 +59,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="also write every captured frame to a classic pcap file",
     )
     parser.add_argument(
+        "--json",
+        action="store_true",
+        help=(
+            "emit one NDJSON object per frame on stdout instead of the "
+            "human-readable rendering"
+        ),
+    )
+    parser.add_argument(
         "-d",
         "--data",
         action="store_true",
-        help="also display each frame's raw payload",
+        help="also display each frame's raw payload (ignored with --json)",
     )
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}"
@@ -88,9 +102,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.read is not None and args.interface is not None:
         build_parser().error("-r/--read and -i/--interface are exclusive")
 
-    outputs: list[Output] = [OutputToScreen(display_payload=args.data)]
+    stats = StatsCollector()
+    outputs: list[Output] = [
+        OutputToNDJSON()
+        if args.json
+        else OutputToScreen(display_payload=args.data)
+    ]
     if args.write is not None:
         outputs.append(OutputToPcap(args.write))
+    outputs.append(stats)
 
     if args.read is not None:
         from packet_sniffer.pcap import read_pcap
@@ -131,6 +151,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     finally:
         for output in outputs:
             output.close()
+        if exit_code == 0:
+            stats.report()
     return exit_code
 
 
