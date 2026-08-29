@@ -81,4 +81,5 @@ def decode_frame(
         payload=bytes(view[cursor:]),
         truncated=declared is not None and declared > len(data),
         error=error,
+        raw=data,
     )
