@@ -124,6 +124,11 @@ class OutputToScreen(Output):
                 f"{_I}[!] Truncated: the IP datagram declares more bytes "
                 f"than were captured"
             )
+        if frame.malformed_length and (ip := frame.layer(IPv4)) is not None:
+            self._print(
+                f"{_I}[!] Malformed: IPv4 total_length ({ip.total_length}) "
+                f"is smaller than its header ({ip.header_len} bytes)"
+            )
         if self._display_payload and frame.payload:
             text = _sanitize_for_terminal(frame.payload.decode(errors="ignore"))
             self._print(f"{_I}[+] Payload ({len(frame.payload)} bytes):")
@@ -320,6 +325,7 @@ class OutputToNDJSON(Output):
             "interface": frame.interface,
             "length": frame.length,
             "truncated": frame.truncated,
+            "malformed_length": frame.malformed_length,
             "error": frame.error,
             "payload_len": len(frame.payload),
             "layers": [
@@ -368,7 +374,7 @@ class StatsCollector(Output):
     def update(self, frame: DecodedFrame) -> None:
         self._frames += 1
         self._bytes += frame.length
-        if frame.error is not None:
+        if frame.error is not None or frame.malformed_length:
             self._malformed += 1
         if frame.truncated:
             self._truncated += 1

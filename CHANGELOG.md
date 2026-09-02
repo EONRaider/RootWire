@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Diagnose IPv4 frames whose `total_length` is smaller than the header
+  itself — a length field that cannot be correct. The frame is flagged
+  `[!] Malformed` on screen, carries a `malformed_length` field in NDJSON
+  output, and counts toward the statistics `malformed` tally; upper layers
+  are still decoded and shown. A `total_length` of 0 is exempt, being the
+  large-send offload (TSO) sentinel found in locally captured frames
+  rather than corruption (#56).
+
 ### Security
 - Payload display (`-d`) now neutralizes terminal control characters.
   Packet payloads are attacker-controlled, and the previous rendering

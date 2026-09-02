@@ -2,7 +2,7 @@ import io
 
 from netprotocols import UDP, Packet
 
-from conftest import _eth, _ipv4
+from conftest import _eth, _ipv4, ipv4_udp
 from rootwire.decoder import decode_frame
 from rootwire.output import OutputToScreen
 
@@ -90,6 +90,11 @@ class TestOutputToScreen:
         truncated_text = render(truncated_frame)
         assert "Malformed header: TCP" in truncated_text
         assert "Truncated" in truncated_text
+
+    def test_malformed_ip_length_is_diagnosed(self):
+        text = render(ipv4_udp(total_length=4))
+        assert "Malformed: IPv4 total_length (4)" in text
+        assert "smaller than its header (20 bytes)" in text
 
 
 class TestExtensionHeaderRendering:

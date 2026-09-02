@@ -36,6 +36,25 @@ def _declared_length(layers: tuple[Protocol, ...]) -> int | None:
     return None
 
 
+def _ip_length_malformed(layers: tuple[Protocol, ...]) -> bool:
+    """Whether a decoded IPv4 header declares an impossible length.
+
+    ``total_length`` counts the whole datagram — header plus data — so a
+    value below the header's own size cannot be correct. The walk advances
+    on ``header_len`` (from ``ihl``), not on ``total_length``, so this does
+    not corrupt decoding; it is purely a diagnosis of a lying length field.
+
+    A ``total_length`` of 0 is exempt: it is the sentinel large-send
+    offload (TSO) leaves in locally captured outbound frames, where the
+    real length is filled in by hardware after capture. Flagging it would
+    cry wolf on ordinary local traffic.
+    """
+    for layer in layers:
+        if isinstance(layer, IPv4):
+            return 0 < layer.total_length < layer.header_len
+    return False
+
+
 def decode_frame(
     data: bytes,
     *,
@@ -80,6 +99,7 @@ def decode_frame(
         layers=decoded_layers,
         payload=bytes(view[cursor:]),
         truncated=declared is not None and declared > len(data),
+        malformed_length=_ip_length_malformed(decoded_layers),
         error=error,
         raw=data,
     )
