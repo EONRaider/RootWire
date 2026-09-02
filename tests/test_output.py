@@ -1,5 +1,8 @@
 import io
 
+from netprotocols import UDP, Packet
+
+from conftest import _eth, _ipv4
 from rootwire.decoder import decode_frame
 from rootwire.output import OutputToScreen
 
@@ -9,6 +12,18 @@ def render(data: bytes, *, display_payload: bool = False) -> str:
     output = OutputToScreen(display_payload=display_payload, stream=stream)
     output.update(decode_frame(data, number=1, timestamp=0.0, interface="eth0"))
     return stream.getvalue()
+
+
+def _frame_with_payload(payload: bytes) -> bytes:
+    """Ethernet / IPv4 / UDP carrying an arbitrary, attacker-shaped
+    payload — the bytes a hostile peer controls end to end. The ports are
+    unassigned so the decoder leaves the payload as raw frame bytes rather
+    than handing it to an upper-layer parser."""
+    udp = UDP(
+        src_port=40000, dst_port=40001, length=8 + len(payload), checksum=0
+    )
+    ip = _ipv4(protocol=17, total_length=20 + 8 + len(payload))
+    return bytes(Packet(_eth(0x0800), ip, udp)) + payload
 
 
 class TestOutputToScreen:
@@ -38,6 +53,35 @@ class TestOutputToScreen:
         assert "GET / HTTP" in render(
             tcp_frame_with_options, display_payload=True
         )
+
+    def test_payload_ansi_escapes_are_neutralized(self):
+        """An attacker-controlled payload must not smuggle ANSI escape
+        sequences into the analyst's terminal via -d."""
+        frame = _frame_with_payload(b"\x1b[2J\x1b[31mowned\x1b[0m")
+        text = render(frame, display_payload=True)
+        assert "\x1b" not in text  # no raw ESC reaches the terminal
+        assert "\\x1b[2J" in text  # rendered as a visible escape instead
+        assert "owned" in text  # printable content still shown
+
+    def test_payload_carriage_return_is_escaped(self):
+        """CR can rewrite the current line; it must not pass through."""
+        frame = _frame_with_payload(b"real\rspoofed")
+        text = render(frame, display_payload=True)
+        assert "\r" not in text
+        assert "\\x0d" in text
+
+    def test_payload_c1_and_bidi_controls_are_escaped(self):
+        """C1 (U+0080 to U+009F) and bidi overrides are non-printable."""
+        frame = _frame_with_payload("\x85\u202eevil".encode())
+        text = render(frame, display_payload=True)
+        assert "\x85" not in text and "\u202e" not in text
+        assert "\\x85" in text and "\\u202e" in text
+
+    def test_payload_newlines_survive_sanitization(self):
+        """Newlines are the intended line structure and are preserved."""
+        frame = _frame_with_payload(b"line-one\nline-two")
+        text = render(frame, display_payload=True)
+        assert "line-one" in text and "line-two" in text
 
     def test_unknown_and_truncated_diagnostics(
         self, unknown_ethertype_frame, truncated_frame

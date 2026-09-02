@@ -10,6 +10,7 @@ stderr, so stdout stays clean for machine-readable output
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections.abc import Iterator, Sequence
 
@@ -78,6 +79,21 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _same_file(a: str, b: str) -> bool:
+    """Whether two path strings name the same file on disk.
+
+    :func:`os.path.samefile` compares device and inode, so it sees
+    through symlinks, hardlinks, and different spellings of an existing
+    path. It raises when a path does not exist yet — as the write target
+    normally does not — and a normalized textual comparison is then the
+    best remaining signal.
+    """
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return os.path.realpath(a) == os.path.realpath(b)
+
+
 def run(
     source: Iterator[tuple[bytes, float]],
     interface: str | None,
@@ -101,6 +117,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.read is not None and args.interface is not None:
         build_parser().error("-r/--read and -i/--interface are exclusive")
+    if (
+        args.read is not None
+        and args.write is not None
+        and _same_file(args.read, args.write)
+    ):
+        # The writer truncates its target on open, before the lazy
+        # replay reader has read a byte, so this would silently destroy
+        # the very capture being replayed. Refuse before anything opens.
+        build_parser().error(
+            "-w/--write and -r/--read refer to the same file; refusing "
+            "to overwrite the capture being replayed"
+        )
 
     stats = StatsCollector()
     outputs: list[Output] = [
@@ -109,7 +137,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         else OutputToScreen(display_payload=args.data)
     ]
     if args.write is not None:
-        outputs.append(OutputToPcap(args.write))
+        try:
+            outputs.append(OutputToPcap(args.write))
+        except OSError as error:
+            # A bad directory or a write-permission denial must not
+            # surface as a raw traceback, nor be folded into the capture
+            # handler below, whose "run with sudo" hint would misdiagnose
+            # it. No output holds a resource yet, so returning is clean.
+            print(
+                f"Error: cannot open '{args.write}' for writing: "
+                f"{error.strerror or error}",
+                file=sys.stderr,
+            )
+            return 1
     outputs.append(stats)
 
     if args.read is not None:
@@ -133,8 +173,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         file=sys.stderr,
     )
     exit_code = 0
+    report_stats = False
     try:
         run(source, interface, outputs)
+        report_stats = True
     except PermissionError:
         print(
             "Error: opening a raw socket requires elevated privileges. "
@@ -148,10 +190,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         exit_code = 1
     except KeyboardInterrupt:
         print("[!] Capture aborted.", file=sys.stderr)
+        report_stats = True
     finally:
         for output in outputs:
             output.close()
-        if exit_code == 0:
+        # Report only on a clean run or a Ctrl-C abort — never while an
+        # unexpected exception is still propagating, where a summary
+        # (with the exit code still reading 0) would disguise the crash.
+        if report_stats:
             stats.report()
     return exit_code
 

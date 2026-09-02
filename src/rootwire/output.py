@@ -51,6 +51,31 @@ _I = " " * 4  # base indentation for layer sections
 _II = " " * 8  # indentation for field detail lines
 
 
+def _sanitize_for_terminal(text: str) -> str:
+    r"""Return *text* with terminal-unsafe characters neutralized.
+
+    Payload bytes are attacker-controlled, so escape sequences must never
+    reach the terminal verbatim: a crafted packet could otherwise move the
+    cursor, rewrite the window title, or recolour and erase prior output
+    when displayed with ``-d``. Printable characters and newlines — the
+    intended line structure — pass through unchanged; everything else
+    (C0 controls and ``DEL``, the C1 range ``U+0080`` to ``U+009F``, and
+    Unicode format characters such as the bidirectional overrides) is
+    rendered as a visible ``\xNN`` or ``\uXXXX`` escape.
+
+    :class:`str.isprintable` already reports every one of those categories
+    as non-printable, so a single membership test covers the whole set.
+    """
+    out: list[str] = []
+    for char in text:
+        if char == "\n" or char.isprintable():
+            out.append(char)
+        else:
+            code = ord(char)
+            out.append(f"\\x{code:02x}" if code <= 0xFF else f"\\u{code:04x}")
+    return "".join(out)
+
+
 class Output(ABC):
     """Interface for consumers of decoded frames (screen, file, ...)."""
 
@@ -100,7 +125,7 @@ class OutputToScreen(Output):
                 f"than were captured"
             )
         if self._display_payload and frame.payload:
-            text = frame.payload.decode(errors="ignore")
+            text = _sanitize_for_terminal(frame.payload.decode(errors="ignore"))
             self._print(f"{_I}[+] Payload ({len(frame.payload)} bytes):")
             self._print(f"{_II}{text.replace(chr(10), chr(10) + _II)}")
         self._print("")
