@@ -15,3 +15,8 @@ dist/
 venv/
 .venv/
 benchmarks/frames.bin
+
+# Test / coverage artifacts
+.coverage
+.coverage.*
+htmlcov/

@@ -19,7 +19,7 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Topic :: System :: Networking :: Monitoring",
 ]
-dependencies = ["netprotocols>=1.1,<2"]
+dependencies = ["netprotocols>=1.3,<2"]
 
 [project.scripts]
 rootwire = "rootwire.cli:main"
