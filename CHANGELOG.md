@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+- Payload display (`-d`) now neutralizes terminal control characters.
+  Packet payloads are attacker-controlled, and the previous rendering
+  passed ESC and other control bytes straight to the terminal, allowing a
+  crafted frame to inject ANSI escape sequences. Non-printable characters
+  (C0/C1 controls, `DEL`, and Unicode format characters such as the
+  bidirectional overrides) are now shown as visible `\xNN`/`\uXXXX`
+  escapes; printable text and newlines are unchanged (#53).
+
+### Fixed
+- Refuse `-r FILE -w FILE` when both refer to the same file. The writer
+  truncated its target before the lazy replay reader had read a byte, so
+  replaying and writing the same path destroyed the capture; it is now
+  rejected up front, before anything is opened (#52).
+- A `-w` target that cannot be opened (bad directory, permission denied)
+  now reports a clear write-specific error instead of a raw traceback,
+  and no longer risks being misreported as a capture-privilege problem
+  (#54).
+- The end-of-run statistics summary is no longer printed while an
+  unexpected exception is propagating, where it made a crash look like a
+  clean run (#54).
+
 ## [5.0.0] - 2026-08-29
 
 **Packet-Sniffer is now RootWire.** Same engine, new name — and its
