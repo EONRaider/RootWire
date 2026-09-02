@@ -101,6 +101,12 @@ uv run pytest
 - Kernel timestamps (`SO_TIMESTAMPNS`) and SIGTERM-clean service use
 - Checksum verification rendering (the library already computes them)
 
+## Contributing
+
+Bug reports and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md)
+covers the development setup, the checks CI runs, and what a good pull request
+looks like here.
+
 ## Legal Disclaimer
 
 The use of code contained in this repository, either in part or in its
