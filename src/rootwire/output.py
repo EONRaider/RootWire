@@ -23,6 +23,7 @@ from netprotocols import (
     ARP,
     TCP,
     UDP,
+    VLAN,
     Ethernet,
     ICMPv4,
     ICMPv6,
@@ -242,6 +243,14 @@ class OutputToScreen(Output):
         self._print(
             f"{_II}Length: {layer.length} | Checksum: {layer.checksum_hex_str}"
         )
+
+    @_render.register
+    def _(self, layer: VLAN, frame: DecodedFrame) -> None:
+        self._print(
+            f"{_I}[+] 802.1Q VLAN (VID {layer.vid}, PCP {layer.pcp}, "
+            f"DEI {layer.dei})"
+        )
+        self._print(f"{_II}EtherType: {layer.ethertype_name}")
 
 
 class OutputToPcap(Output):
