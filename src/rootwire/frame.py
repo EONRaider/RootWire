@@ -31,6 +31,12 @@ class DecodedFrame:
     :param payload: The bytes following the last decoded header.
     :param truncated: True when the enclosed IP datagram declares more
         bytes than were captured (the payload is incomplete).
+    :param malformed_length: True when a decoded IPv4 header declares a
+        ``total_length`` smaller than the header itself — an impossible
+        value. A ``total_length`` of 0 is exempt: it is the sentinel
+        large-send offload (TSO) leaves in locally captured frames, not
+        corruption. Upper layers are still decoded and shown; this only
+        adds the diagnosis.
     :param error: Diagnostic message when the decode chain aborted on a
         malformed header, else ``None``. The layers decoded before the
         failure are preserved.
@@ -46,6 +52,7 @@ class DecodedFrame:
     layers: tuple[Protocol, ...]
     payload: bytes
     truncated: bool = False
+    malformed_length: bool = False
     error: str | None = None
     raw: bytes = b""
 

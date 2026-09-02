@@ -3,7 +3,7 @@
 import io
 import json
 
-from conftest import FIXTURES
+from conftest import FIXTURES, ipv4_udp
 from rootwire import cli
 from rootwire.decoder import decode_frame
 from rootwire.output import OutputToNDJSON, StatsCollector
@@ -14,6 +14,7 @@ SCHEMA_KEYS = {
     "interface",
     "length",
     "truncated",
+    "malformed_length",
     "error",
     "payload_len",
     "layers",
@@ -97,6 +98,12 @@ class TestStatsCollector:
         stream = io.StringIO()
         stats.report(stream)
         assert "malformed: 1, truncated: 1" in stream.getvalue()
+
+    def test_underlength_ip_counts_as_malformed(self):
+        stats = self.collect([ipv4_udp(total_length=4)])
+        stream = io.StringIO()
+        stats.report(stream)
+        assert "malformed: 1" in stream.getvalue()
 
 
 class TestJSONModePurity:

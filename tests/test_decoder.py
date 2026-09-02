@@ -1,5 +1,6 @@
 from netprotocols import ARP, TCP, UDP, Ethernet, ICMPv4, ICMPv6, IPv4, IPv6
 
+from conftest import ipv4_udp
 from rootwire.decoder import decode_frame
 
 
@@ -65,6 +66,32 @@ class TestDecodeFrame:
         assert frame.error is not None
         assert "TCP" in frame.error
         assert frame.truncated
+
+    def test_ipv4_total_length_below_header_is_flagged(self):
+        """A total_length smaller than the 20-byte header is impossible;
+        it is diagnosed, and upper layers are still decoded (the walk runs
+        off header_len, not total_length)."""
+        frame = decode(ipv4_udp(total_length=4))
+        assert frame.malformed_length
+        assert [type(layer) for layer in frame.layers] == [
+            Ethernet,
+            IPv4,
+            UDP,
+        ]
+        assert frame.error is None
+        assert not frame.truncated
+
+    def test_ipv4_total_length_zero_is_not_flagged(self):
+        """total_length == 0 is the large-send offload (TSO) sentinel in
+        locally captured frames, not corruption."""
+        assert not decode(ipv4_udp(total_length=0)).malformed_length
+
+    def test_ipv4_total_length_equal_to_header_is_not_flagged(self):
+        """A header-only datagram (total_length == header) is valid."""
+        assert not decode(ipv4_udp(total_length=20)).malformed_length
+
+    def test_ipv4_valid_total_length_is_not_flagged(self):
+        assert not decode(ipv4_udp(total_length=20 + 8 + 2)).malformed_length
 
     def test_metadata_carried_through(self, arp_frame):
         frame = decode_frame(

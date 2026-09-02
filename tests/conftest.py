@@ -46,6 +46,17 @@ def _ipv4(protocol: int, total_length: int, options: bytes = b"") -> IPv4:
     )
 
 
+def ipv4_udp(total_length: int, payload: bytes = b"\xaa\xbb") -> bytes:
+    """Ethernet / IPv4 / UDP with a caller-chosen IPv4 ``total_length``,
+    for exercising length diagnostics. The ports are unassigned so the
+    decoder leaves the payload as raw frame bytes."""
+    udp = UDP(
+        src_port=40000, dst_port=40001, length=8 + len(payload), checksum=0
+    )
+    ip = _ipv4(protocol=17, total_length=total_length)
+    return bytes(Packet(_eth(0x0800), ip, udp)) + payload
+
+
 @pytest.fixture
 def arp_frame() -> bytes:
     return bytes(
