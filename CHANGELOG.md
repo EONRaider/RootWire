@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are still decoded and shown. A `total_length` of 0 is exempt, being the
   large-send offload (TSO) sentinel found in locally captured frames
   rather than corruption (#56).
+- Handle `SIGTERM` as a clean shutdown, the same as Ctrl-C: flush every
+  output, print the stats summary, and exit 0. Previously only `SIGINT`
+  was handled — a service manager's stop (or plain `kill`) hit Python's
+  default disposition, which terminates immediately and skips output
+  flushing entirely, losing the tail of a `-w` capture and the run
+  summary (#60).
 
 ### Security
 - Payload display (`-d`) now neutralizes terminal control characters.

@@ -11,8 +11,11 @@ from __future__ import annotations
 
 import argparse
 import os
+import signal
 import sys
 from collections.abc import Iterator, Sequence
+from types import FrameType
+from typing import NoReturn
 
 from rootwire import __version__
 from rootwire.decoder import decode_frame
@@ -77,6 +80,26 @@ def build_parser() -> argparse.ArgumentParser:
         "--version", action="version", version=f"%(prog)s {__version__}"
     )
     return parser
+
+
+class _Terminated(KeyboardInterrupt):
+    """Raised by the SIGTERM handler.
+
+    A :class:`KeyboardInterrupt` subclass so a SIGTERM abort shares
+    Ctrl-C's shutdown path (flush outputs, report stats, exit 0) without
+    a second ``except`` clause, while still being distinguishable for the
+    shutdown message.
+    """
+
+
+def _raise_terminated(signum: int, frame: FrameType | None) -> NoReturn:
+    """SIGTERM handler: raise to interrupt whatever is currently
+    blocked (a raw-socket ``recv`` or the replay loop) instead of
+    Python's default disposition, which terminates the process outright
+    and skips ``finally`` blocks — losing unflushed output and the
+    stats summary.
+    """
+    raise _Terminated
 
 
 def _same_file(a: str, b: str) -> bool:
@@ -174,6 +197,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     exit_code = 0
     report_stats = False
+    # Only for the duration of the capture: a service manager's SIGTERM
+    # should stop the run cleanly, the same as Ctrl-C, instead of hitting
+    # Python's default disposition (immediate termination, no `finally`,
+    # unflushed output). Restored below so importing rootwire as a
+    # library never hijacks the caller's signal handling.
+    previous_sigterm_handler = signal.signal(signal.SIGTERM, _raise_terminated)
     try:
         run(source, interface, outputs)
         report_stats = True
@@ -188,15 +217,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ValueError as e:  # unreadable/foreign pcap on -r
         print(f"Error: {e}", file=sys.stderr)
         exit_code = 1
-    except KeyboardInterrupt:
-        print("[!] Capture aborted.", file=sys.stderr)
+    except KeyboardInterrupt as abort:
+        print(
+            "[!] Terminated."
+            if isinstance(abort, _Terminated)
+            else "[!] Capture aborted.",
+            file=sys.stderr,
+        )
         report_stats = True
     finally:
+        signal.signal(signal.SIGTERM, previous_sigterm_handler)
         for output in outputs:
             output.close()
-        # Report only on a clean run or a Ctrl-C abort — never while an
-        # unexpected exception is still propagating, where a summary
-        # (with the exit code still reading 0) would disguise the crash.
+        # Report only on a clean run or an abort (Ctrl-C or SIGTERM) —
+        # never while an unexpected exception is still propagating, where
+        # a summary (with the exit code still reading 0) would disguise
+        # the crash.
         if report_stats:
             stats.report()
     return exit_code
