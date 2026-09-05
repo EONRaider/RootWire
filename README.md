@@ -1,5 +1,6 @@
 # RootWire
 
+[![CodeFactor](https://www.codefactor.io/repository/github/eonraider/rootwire/badge)](https://www.codefactor.io/repository/github/eonraider/rootwire)
 [![CI](https://github.com/EONRaider/RootWire/actions/workflows/ci.yml/badge.svg)](https://github.com/EONRaider/RootWire/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/rootwire)](https://pypi.org/project/rootwire/)
 ![Python Version](https://img.shields.io/badge/python-3.12%2B-blue?logo=python)
