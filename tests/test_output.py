@@ -1,6 +1,6 @@
 import io
 
-from netprotocols import UDP, Packet
+from netprotocols import DNS, UDP, Packet
 
 from conftest import _eth, _ipv4, ipv4_udp
 from rootwire.decoder import decode_frame
@@ -112,6 +112,32 @@ class TestDNSRendering:
         texts = [render(frame) for frame in read_pcap(pcap)]
         assert any("DNS response" in text for text in texts)
         assert any("A: " in text for text in texts)
+
+    def test_dns_question_name_ansi_escapes_are_neutralized(self):
+        """A DNS name is fully attacker-controlled (it comes straight
+        off the wire from whatever server answered) -- a malicious
+        label must not smuggle ANSI escapes into the terminal, the
+        same guarantee -d's payload display already has."""
+        evil = b"\x1b[31mowned\x1b[0m"
+        qname = bytes([len(evil)]) + evil + b"\x00"
+        sections = qname + b"\x00\x01" + b"\x00\x01"  # QTYPE=A, QCLASS=IN
+        dns = DNS(
+            transaction_id=1,
+            flags=0x8180,
+            qdcount=1,
+            ancount=0,
+            nscount=0,
+            arcount=0,
+            sections=sections,
+        )
+        udp = UDP(
+            src_port=53, dst_port=1234, length=8 + dns.header_len, checksum=0
+        )
+        ip = _ipv4(protocol=17, total_length=20 + 8 + dns.header_len)
+        frame = bytes(Packet(_eth(0x0800), ip, udp, dns))
+        text = render(frame)
+        assert "\x1b" not in text
+        assert "\\x1b[31mowned\\x1b[0m" in text
 
 
 class TestExtensionHeaderRendering:

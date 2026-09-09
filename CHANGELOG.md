@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- The new DNS renderer (below) now neutralizes terminal control
+  characters in question/answer names and RDATA, the same way `-d`'s
+  payload display already does — a DNS name is fully attacker-controlled
+  (whatever a queried server answers), and rendering it unsanitized
+  would let a crafted response inject ANSI escape sequences into the
+  analyst's terminal. Caught by review before merge (#75).
+
 ### Added
 - **Screen renderers for DNS, DNS-over-TCP, and DHCP.** These already
   decoded correctly (chain dispatch is registry-driven, not a RootWire

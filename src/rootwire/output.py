@@ -295,11 +295,13 @@ class OutputToScreen(Output):
             self._print(f"{_II}[!] Records malformed: {error}")
             return
         for question in questions:
-            self._print(f"{_II}Q: {question.name} (type {question.qtype})")
+            name = _sanitize_for_terminal(question.name)
+            self._print(f"{_II}Q: {name} (type {question.qtype})")
         for answer in answers:
+            name = _sanitize_for_terminal(answer.name)
+            rdata = _sanitize_for_terminal(answer.rdata_text)
             self._print(
-                f"{_II}A: {answer.name} {answer.rtype_name} "
-                f"{answer.ttl}s -> {answer.rdata_text}"
+                f"{_II}A: {name} {answer.rtype_name} {answer.ttl}s -> {rdata}"
             )
 
     @_render.register
