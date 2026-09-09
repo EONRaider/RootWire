@@ -1,6 +1,6 @@
 [project]
 name = "rootwire"
-version = "5.0.0"
+version = "6.0.0"
 description = "RootWire: a network traffic monitor that decodes raw Ethernet frames"
 readme = "README.md"
 license = "AGPL-3.0-or-later"

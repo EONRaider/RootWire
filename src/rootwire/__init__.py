@@ -5,6 +5,6 @@ Formerly known as Packet-Sniffer."""
 
 from rootwire.frame import DecodedFrame
 
-__version__ = "5.0.0"
+__version__ = "6.0.0"
 
 __all__ = ["DecodedFrame", "__version__"]
