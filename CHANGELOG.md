@@ -24,6 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   precisions losslessly (#59).
 
 ### Added
+- **`--filter {tcp,udp,arp,ip6}`**: attach a kernel-side classic-BPF
+  (cBPF) filter to the capture socket (`SO_ATTACH_FILTER`), the same
+  mechanism `tcpdump` itself uses, so non-matching frames are dropped
+  in the kernel and never copied to userspace. This release ships a
+  small, canned set of pre-compiled programs, each verified
+  byte-for-byte against `tcpdump -dd <expression>`; compiling
+  arbitrary filter expressions (`tcp port 80`, `host 1.2.3.4`) is
+  future work. Mutually exclusive with `-r` — replay has no socket to
+  attach a kernel filter to (#62).
 - Diagnose IPv4 frames whose `total_length` is smaller than the header
   itself — a length field that cannot be correct. The frame is flagged
   `[!] Malformed` on screen, carries a `malformed_length` field in NDJSON

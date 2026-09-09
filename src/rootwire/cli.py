@@ -18,6 +18,7 @@ from types import FrameType
 from typing import NoReturn
 
 from rootwire import __version__
+from rootwire.bpf import CANNED_FILTERS, FilterProgram
 from rootwire.decoder import decode_frame
 from rootwire.output import (
     Output,
@@ -61,6 +62,15 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="FILE",
         default=None,
         help="also write every captured frame to a classic pcap file",
+    )
+    parser.add_argument(
+        "--filter",
+        choices=sorted(CANNED_FILTERS),
+        default=None,
+        help=(
+            "attach a kernel-side capture filter so only matching frames "
+            "reach userspace; mutually exclusive with -r"
+        ),
     )
     parser.add_argument(
         "--json",
@@ -140,6 +150,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.read is not None and args.interface is not None:
         build_parser().error("-r/--read and -i/--interface are exclusive")
+    if args.read is not None and args.filter is not None:
+        build_parser().error(
+            "-r/--read and --filter are exclusive: replay has no socket "
+            "to attach a kernel filter to"
+        )
     if (
         args.read is not None
         and args.write is not None
@@ -183,7 +198,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         from rootwire.capture import capture  # Linux-only import
 
-        source = capture(args.interface)
+        filter_program = (
+            FilterProgram(CANNED_FILTERS[args.filter])
+            if args.filter is not None
+            else None
+        )
+        source = capture(args.interface, filter_program)
         interface = args.interface
 
     print(
