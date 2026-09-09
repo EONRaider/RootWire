@@ -27,13 +27,16 @@ from netprotocols import (
     Ethernet,
     ICMPv4,
     ICMPv6,
+    InvalidFieldError,
     IPv4,
+    IPv4Option,
     IPv6,
     IPv6DestinationOptions,
     IPv6Fragment,
     IPv6HopByHopOptions,
     IPv6Routing,
     Protocol,
+    TCPOption,
 )
 
 from rootwire.frame import DecodedFrame
@@ -74,6 +77,26 @@ def _sanitize_for_terminal(text: str) -> str:
             code = ord(char)
             out.append(f"\\x{code:02x}" if code <= 0xFF else f"\\u{code:04x}")
     return "".join(out)
+
+
+def _format_option(option: IPv4Option | TCPOption) -> str:
+    """A compact ``"Name (value)"`` / ``"Name (N bytes)"`` / ``"Name"``
+    rendering of one TLV option: decoded where the library understands
+    the kind (``option.value``), falling back to a raw byte count for
+    kinds it only keeps raw, and bare for a kind with no data at all
+    (EOL, NOP, SACK-Permitted)."""
+    value = option.value
+    if value is None:
+        return (
+            f"{option.kind_name} ({len(option.data)} bytes)"
+            if option.data
+            else option.kind_name
+        )
+    if isinstance(value, tuple):
+        # Timestamps' (tsval, tsecr) pair and SACK's block tuple both
+        # already stringify with their own parens -- no extra wrapping.
+        return f"{option.kind_name} {value}"
+    return f"{option.kind_name} ({value})"
 
 
 class Output(ABC):
@@ -170,12 +193,8 @@ class OutputToScreen(Output):
         self._print(
             f"{_II}Protocol: {layer.protocol_name} | "
             f"Checksum: {layer.checksum_hex_str}"
-            + (
-                f" | Options: {len(layer.options)} bytes"
-                if layer.options
-                else ""
-            )
         )
+        self._render_options_line(layer)
 
     @_render.register
     def _(self, layer: IPv6, frame: DecodedFrame) -> None:
@@ -207,6 +226,22 @@ class OutputToScreen(Output):
         self._print(
             f"{_II}Length: {layer.header_len} bytes | "
             f"Next Header: {layer.next_header_name}"
+        )
+
+    def _render_options_line(self, layer: IPv4 | TCP) -> None:
+        """Print a decoded ``"Options: ..."`` summary, or a ``[!]``
+        diagnostic if the options bytes are malformed. Prints nothing
+        for a header carrying no options."""
+        if not layer.options:
+            return
+        try:
+            options = layer.parsed_options
+        except InvalidFieldError as error:
+            self._print(f"{_II}[!] Options malformed: {error}")
+            return
+        self._print(
+            f"{_II}Options: "
+            + ", ".join(_format_option(option) for option in options)
         )
 
     @_render.register
@@ -251,6 +286,30 @@ class OutputToScreen(Output):
             f"{_II}Type: {layer.type} ({layer.type_name}) | "
             f"Code: {layer.code} | Checksum: {layer.checksum_hex_str}"
         )
+        if isinstance(layer, ICMPv6):
+            self._render_ndp(layer)
+
+    def _render_ndp(self, layer: ICMPv6) -> None:
+        """Neighbor Discovery detail for a Router/Neighbor
+        Solicitation/Advertisement or Redirect (RFC 4861) -- a no-op
+        for every other ICMPv6 message type, since
+        ``ndp_target_address``/``ndp_options`` are both ``None`` there."""
+        target = layer.ndp_target_address
+        if target is not None:
+            self._print(f"{_II}Target: {target}")
+        try:
+            options = layer.ndp_options
+        except InvalidFieldError as error:
+            self._print(f"{_II}[!] NDP options malformed: {error}")
+            return
+        for option in options or ():
+            detail = option.link_layer_address or (
+                option.data.hex() if option.data else ""
+            )
+            self._print(
+                f"{_II}Option: {option.type_name}"
+                + (f" ({detail})" if detail else "")
+            )
 
     @_render.register
     def _(self, layer: TCP, frame: DecodedFrame) -> None:
@@ -260,14 +319,9 @@ class OutputToScreen(Output):
             f"Seq: {layer.seq} | Ack: {layer.ack}"
         )
         self._print(
-            f"{_II}Window: {layer.window} | "
-            f"Checksum: {layer.checksum_hex_str}"
-            + (
-                f" | Options: {len(layer.options)} bytes"
-                if layer.options
-                else ""
-            )
+            f"{_II}Window: {layer.window} | Checksum: {layer.checksum_hex_str}"
         )
+        self._render_options_line(layer)
 
     @_render.register
     def _(self, layer: UDP, frame: DecodedFrame) -> None:

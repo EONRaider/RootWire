@@ -6,6 +6,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **ICMPv6 Neighbor Discovery detail.** A Router/Neighbor Solicitation
+  or Advertisement (or Redirect) now shows its target address and
+  every option TLV (source/target link-layer address rendered as a
+  MAC, others as their raw byte count) instead of a bare Type/Code
+  line — IPv6's ARP-equivalent was previously indistinguishable from
+  any other ICMPv6 message on screen.
+- **Decoded IPv4 and TCP options**, replacing the previous
+  `Options: N bytes` byte count. Kinds the library understands
+  (IPv4's Record Route, Timestamp, Router Alert; TCP's MSS, Window
+  Scale, SACK, Timestamps) render their actual value; every other kind
+  still shows its name with a raw byte count. Malformed options
+  (a declared length running past the buffer) surface as a `[!]`
+  diagnostic rather than raising (#79).
+
 ## [6.0.0] - 2026-09-09
 
 RootWire's own dependency, [NETProtocols](https://github.com/EONRaider/NETProtocols),
