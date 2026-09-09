@@ -99,10 +99,13 @@ so the memory story is engineered, not accidental:
 1. `capture_async()` yields **one freshly allocated, immutable `bytes`
    object per frame** — never a reused buffer. Nothing that happens
    later can be corrupted by the next `recvmsg`.
-2. `decode_frame()` wraps it in a `memoryview` so walking the layers
-   slices without copying; every value it *keeps* (fields, options,
-   payload) is materialized, and `frame.raw` simply holds the original
-   object. The view dies with the function call.
+2. `decode_frame()` hands the `bytes` object straight to
+   `netprotocols.decode_frame()`, which walks the layers — NETProtocols
+   measured plain-`bytes` slicing as faster than a RootWire-side
+   `memoryview` wrap for a single small frame, so this function no
+   longer does its own wrapping. Every value the walk *keeps* (fields,
+   options, payload) is materialized, and `frame.raw` simply holds the
+   original object.
 3. The resulting `DecodedFrame` is **immutable and self-contained**:
    no references to sockets or capture buffers. An earlier design
    reused one mutable decoder object per capture; any consumer that
@@ -132,9 +135,11 @@ as exceptions to die on:
   chain walks straight through it into whatever it encapsulates,
   including nested (QinQ) tags.
 - **Malformed header?** The library raises a typed `ProtocolError`
-  (truncated buffer, lying length field). `decode_frame()` catches it,
-  keeps the layers that did decode, and records the diagnostic on
-  `frame.error`. The capture continues.
+  (truncated buffer, lying length field). `decode_frame()` calls the
+  library's own `decode_frame()` with `lax=True`, which keeps the
+  layers that did decode instead of propagating the exception;
+  RootWire's `decode_frame()` records the diagnostic on `frame.error`.
+  The capture continues.
 - **Truncated datagram?** If the IP layer declares more bytes than
   were captured, `frame.truncated` is set and the renderer says so.
 - **Crafted amplification?** The decode chain is capped at 16 layers
