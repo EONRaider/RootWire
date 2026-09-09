@@ -14,6 +14,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   would let a crafted response inject ANSI escape sequences into the
   analyst's terminal. Caught by review before merge (#75).
 
+### Changed
+- **`decoder.py` now delegates its chain walk to `netprotocols.decode_frame()`
+  instead of hand-rolling the same loop the library has shipped since
+  2.0.** No behavior change for well-formed frames. The layer-cap
+  diagnostic's wording changed to match the library's own
+  `MaxDepthExceededError` message (`DecodedFrame.error` now reads
+  "chain still going after N headers (...)" instead of "decode chain
+  exceeded N layers"); every other error message is unchanged, since
+  each already names its own protocol in its text (#74).
+
 ### Added
 - **Screen renderers for DNS, DNS-over-TCP, and DHCP.** These already
   decoded correctly (chain dispatch is registry-driven, not a RootWire
