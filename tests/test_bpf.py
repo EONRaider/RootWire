@@ -8,8 +8,10 @@ drops non-matching frames" behavior is a separate, privilege-gated
 concern this file does not cover.
 """
 
+import ctypes
 import socket
 import struct
+import sys
 
 import pytest
 
@@ -18,7 +20,25 @@ from rootwire.bpf import (
     SO_ATTACH_FILTER,
     SO_LOCK_FILTER,
     FilterProgram,
+    SockFilter,
+    _SockFprog,
 )
+
+_INSTRUCTION = struct.Struct("=HBBI")
+
+
+def _resolve(program: FilterProgram) -> tuple[SockFilter, ...]:
+    """Dereference a FilterProgram's sock_fprog pointer back into its
+    instructions, proving the buffer it points at is intact -- rather
+    than only checking the outer sock_fprog's fixed-size bytes, which
+    say nothing about what the pointer still points to."""
+    fprog = _SockFprog.from_buffer_copy(program.as_bytes())
+    raw = ctypes.string_at(fprog.filter, fprog.len * _INSTRUCTION.size)
+    return tuple(
+        _INSTRUCTION.unpack_from(raw, i * _INSTRUCTION.size)
+        for i in range(fprog.len)
+    )
+
 
 #: Transcribed byte-for-byte from a real `tcpdump -dd <expr>` run
 #: (tcpdump 4.99.1 / libpcap 1.10.1), compiled against Ethernet — the
@@ -88,14 +108,22 @@ class TestFilterProgram:
     def test_keeps_the_instruction_buffer_alive(self):
         """Nothing but FilterProgram's own reference should keep the
         packed instructions from being garbage-collected between
-        construction and attach."""
-        program = FilterProgram(CANNED_FILTERS["tcp"])
+        construction and attach. Actually dereferences the pointer
+        after a collection cycle and checks the recovered instructions
+        still match -- checking only sock_fprog's own fixed-size bytes
+        would pass even if the pointed-to buffer had been freed and
+        the pointer now dangled."""
         import gc
 
-        gc.collect()  # would corrupt program._buffer if it weren't kept alive
-        assert len(program.as_bytes()) > 0
+        program = FilterProgram(CANNED_FILTERS["tcp"])
+        gc.collect()
+        assert _resolve(program) == CANNED_FILTERS["tcp"]
 
 
+@pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="SO_ATTACH_FILTER/SO_LOCK_FILTER are Linux-specific socket options",
+)
 class TestAttachPath:
     """SO_ATTACH_FILTER attaches to any socket, not just PF_PACKET, so
     the attach path is tested for real here, unprivileged."""
