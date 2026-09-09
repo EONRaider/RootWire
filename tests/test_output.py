@@ -1,6 +1,6 @@
 import io
 
-from netprotocols import DNS, IGMP, UDP, Packet
+from netprotocols import DNS, IGMP, TCP, UDP, Packet
 
 from conftest import _eth, _ipv4, ipv4_udp
 from rootwire.decoder import decode_frame
@@ -38,7 +38,7 @@ class TestOutputToScreen:
         assert "IPv4 192.168.1.96 -> 192.168.1.254" in text
         assert "TCP 51888 -> 80" in text
         assert "PSH ACK" in text
-        assert "Options: 12 bytes" in text
+        assert "Options: No-Operation, No-Operation, Timestamps" in text
 
     def test_icmpv6_rendering_shows_enclosing_ip_route(self, icmpv6_frame):
         """The old renderer crashed on IPv6 (flabel_txt_str) and ICMP
@@ -189,6 +189,78 @@ class TestExtensionHeaderRendering:
         ]
         assert any("first fragment" in text for text in texts)
         assert any("fragment at offset" in text for text in texts)
+
+
+class TestNDPRendering:
+    def test_neighbor_solicitation_shows_target_and_link_layer_option(self):
+        from conftest import FIXTURES, read_pcap
+
+        frame = read_pcap(FIXTURES / "ipv6_ndp_mld.pcap")[0]
+        text = render(frame)
+        assert "Neighbor Solicitation" in text
+        assert "Target: 2804:14d:bac3:8ada:df3:1895:3c4e:7470" in text
+        assert "Option: Source Link-Layer Address (84:01:12:be:7e:d9)" in text
+
+    def test_neighbor_advertisement_shows_target_link_layer_option(self):
+        from conftest import FIXTURES, read_pcap
+
+        frame = read_pcap(FIXTURES / "ipv6_ndp_mld.pcap")[5]
+        text = render(frame)
+        assert "Neighbor Advertisement" in text
+        assert "Target: fe80::f6d7:8b9a:993e:5efa" in text
+        assert "Option: Target Link-Layer Address (a8:3b:76:da:a6:9d)" in text
+
+    def test_echo_frames_show_no_ndp_fields(self, icmpv6_frame):
+        """Only NDP message types carry a target/options -- an ordinary
+        echo must not print either line."""
+        text = render(icmpv6_frame)
+        assert "Target:" not in text
+        assert "Option:" not in text
+
+
+class TestOptionRendering:
+    def test_ipv4_router_alert_option_decoded(self):
+        udp = UDP(src_port=1234, dst_port=53, length=8, checksum=0)
+        ip = _ipv4(
+            protocol=17, total_length=24 + 8, options=b"\x94\x04\x00\x00"
+        )
+        text = render(bytes(Packet(_eth(0x0800), ip, udp)))
+        assert "Options: Router Alert (0)" in text
+
+    def test_ipv4_malformed_options_diagnosed(self):
+        """Kind 7 (Record Route) declares a length of 10 but only 4
+        option bytes are actually present -- parsed_options must raise,
+        and the renderer must turn that into a diagnostic, not a
+        traceback."""
+        udp = UDP(src_port=1234, dst_port=53, length=8, checksum=0)
+        ip = _ipv4(
+            protocol=17, total_length=24 + 8, options=b"\x07\x0a\x00\x00"
+        )
+        text = render(bytes(Packet(_eth(0x0800), ip, udp)))
+        assert "[!] Options malformed" in text
+
+    def test_tcp_sack_option_decoded(self):
+        """NOP, NOP, SACK (one block: 100-200) -- exercises the
+        tuple-of-tuples value formatting, distinct from Timestamps'
+        plain pair (already covered by test_tcp_rendering_includes_
+        ip_and_flags)."""
+        options = b"\x01\x01\x05\x0a\x00\x00\x00\x64\x00\x00\x00\xc8"
+        tcp = TCP(
+            src_port=1234,
+            dst_port=80,
+            seq=0,
+            ack=0,
+            data_offset=5 + len(options) // 4,
+            reserved=0,
+            flags=0x010,
+            window=1024,
+            checksum=0,
+            urgent_pointer=0,
+            options=options,
+        )
+        ip = _ipv4(protocol=6, total_length=20 + tcp.header_len)
+        text = render(bytes(Packet(_eth(0x0800), ip, tcp)))
+        assert "Options: No-Operation, No-Operation, SACK ((100, 200),)" in text
 
 
 class TestChecksumVerification:

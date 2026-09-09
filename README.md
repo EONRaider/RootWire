@@ -24,15 +24,18 @@ JSON:
         Protocol: TCP | Checksum: 0x2b51
     [+] TCP 51888 -> 443
         Flags: 0x002 (SYN) | Seq: 3598801521 | Ack: 0
-        Window: 64240 | Checksum: 0x2008 | Options: 20 bytes
+        Window: 64240 | Checksum: 0x2008
+        Options: Maximum Segment Size (1460), SACK Permitted, Timestamps (3644437524, 0), No-Operation, Window Scale (7)
 ```
 
 The decoder covers Ethernet (802.1Q VLAN tags, including nested QinQ
-tagging), ARP, IPv4 (options and fragments), IPv6 **including
-extension headers** (an MLD report renders its full Hop-by-Hop chain),
-ICMPv4/v6, TCP (options-aware payload offsets) and UDP. Every
-IPv4/ICMPv4/ICMPv6/TCP/UDP checksum is verified against a
-recomputation, flagging a mismatch inline
+tagging), ARP, IPv4 (**decoded options** and fragments), IPv6
+**including extension headers** (an MLD report renders its full
+Hop-by-Hop chain) and **Neighbor Discovery** (a Router/Neighbor
+Solicitation or Advertisement shows its target address and link-layer
+options), ICMPv4/v6, TCP (options-aware payload offsets, **decoded
+options**) and UDP. Every IPv4/ICMPv4/ICMPv6/TCP/UDP checksum is
+verified against a recomputation, flagging a mismatch inline
 (`Checksum: 0x0000 [!] mismatch (expected 0x1a2b)`) — a real signal
 for corrupted or spoofed traffic, silent for a non-reassembled
 fragment, where the wire checksum covers a datagram RootWire never

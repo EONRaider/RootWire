@@ -73,6 +73,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-reassembled IP fragment — the wire checksum covers the
   reassembled datagram, which RootWire never rebuilds, so it can't be
   verified against a single fragment's bytes without lying (#78).
+- **ICMPv6 Neighbor Discovery detail.** A Router/Neighbor Solicitation
+  or Advertisement (or Redirect) now shows its target address and
+  every option TLV (source/target link-layer address rendered as a
+  MAC, others as their raw byte count) instead of a bare Type/Code
+  line — IPv6's ARP-equivalent was previously indistinguishable from
+  any other ICMPv6 message on screen.
+- **Decoded IPv4 and TCP options**, replacing the previous
+  `Options: N bytes` byte count. Kinds the library understands
+  (IPv4's Record Route, Timestamp, Router Alert; TCP's MSS, Window
+  Scale, SACK, Timestamps) render their actual value; every other kind
+  still shows its name with a raw byte count. Malformed options
+  (a declared length running past the buffer) surface as a `[!]`
+  diagnostic rather than raising (#79).
 
 ## [6.0.0] - 2026-09-09
 
