@@ -6,6 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.0.0] - 2026-09-09
+
+RootWire's own dependency, [NETProtocols](https://github.com/EONRaider/NETProtocols),
+is bumped to its latest release (2.2.1); no source changes were needed
+— the only breaking change since RootWire's 1.3 floor (removal of
+`Packet.payload`) is a name RootWire never called.
+
 ### Changed
 - **BREAKING:** Capture timestamps are now kernel-sourced nanoseconds
   end-to-end instead of a userspace `time.time()` reading. Live capture
