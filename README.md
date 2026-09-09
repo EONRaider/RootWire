@@ -8,10 +8,12 @@
 [![License](https://img.shields.io/github/license/EONRaider/RootWire)](LICENSE)
 
 A network traffic monitor for GNU/Linux — *formerly known as
-Packet-Sniffer*. Frames are captured from a network interface with a
-raw socket, decoded layer by layer with the
+Packet-Sniffer*. Frames are captured from one or more network
+interfaces with a raw socket, timestamped by the kernel itself, decoded
+layer by layer with the
 [NETProtocols](https://github.com/EONRaider/NETProtocols) library, and
-rendered live, written to pcap, or streamed as JSON:
+rendered live, written to nanosecond-precision pcap, or streamed as
+JSON:
 
 ```
 [>] Frame #4 at 15:42:07 (wlan0, 74 bytes)
@@ -25,13 +27,14 @@ rendered live, written to pcap, or streamed as JSON:
         Window: 64240 | Checksum: 0x2008 | Options: 20 bytes
 ```
 
-The decoder covers Ethernet, ARP, IPv4 (options and fragments), IPv6
-**including extension headers** (an MLD report renders its full
-Hop-by-Hop chain), ICMPv4/v6, TCP (options-aware payload offsets) and
-UDP. Malformed or truncated frames are diagnosed instead of crashing
-the capture, unknown protocols end the chain gracefully, and a
-16-layer cap keeps crafted extension-header stacks from amplifying —
-the capture survives whatever the network delivers.
+The decoder covers Ethernet (802.1Q VLAN tags, including nested QinQ
+tagging), ARP, IPv4 (options and fragments), IPv6 **including
+extension headers** (an MLD report renders its full Hop-by-Hop chain),
+ICMPv4/v6, TCP (options-aware payload offsets) and UDP. Malformed or
+truncated frames are diagnosed instead of crashing the capture,
+unknown protocols end the chain gracefully, and a 16-layer cap keeps
+crafted extension-header stacks from amplifying — the capture survives
+whatever the network delivers.
 
 ## Installation
 
@@ -57,12 +60,13 @@ options:
   -i, --interface   interface to capture frames from; repeat to capture on
                     several interfaces concurrently (default: all interfaces)
   -r, --read FILE   replay frames from a classic pcap file instead of live
-                    capture (no privileges required)
+                    capture (no privileges required; mutually exclusive
+                    with -i)
   -w, --write FILE  also write every captured frame to a classic pcap file
   --filter NAME_OR_EXPR
                     attach a kernel-side capture filter so only matching
-                    frames reach userspace: a canned name (tcp, udp, arp,
-                    ip6) or a filter expression -- protocols tcp/udp/icmp/
+                    frames reach userspace: a canned name (arp, ip6, tcp,
+                    udp) or a filter expression -- protocols tcp/udp/icmp/
                     arp/ip/ip6; host/port, each optionally prefixed with
                     src/dst; and/or/not; parentheses (e.g. "tcp and port
                     80"); live capture only
@@ -73,7 +77,8 @@ options:
 
 Capture statistics — frames, bytes, frames/s, malformed/truncated
 counts, per-protocol tallies — are reported on stderr when the capture
-ends. Some favorite combinations:
+ends, whether that's Ctrl-C, `SIGTERM`, or (for `-r`) end of file: all
+three trigger the same clean shutdown. Some favorite combinations:
 
 ```
 sudo rootwire -i eth0 -w session.pcap             # capture and keep the evidence
@@ -92,8 +97,10 @@ privileges. From a clone, run it as `sudo .venv/bin/python -m rootwire`.
 ## How it works
 
 `capture.py`'s `capture_async()` yields raw frames — merged from one
-`AF_PACKET` socket per interface — as `(bytes, timestamp, interface)`
-triples; replaying from a file with `-r` adapts `pcap.py`'s frames
+`AF_PACKET` socket per interface, each timestamped by the kernel
+itself at arrival (`SO_TIMESTAMPNS`, not a userspace clock read) — as
+`(bytes, timestamp, interface)` triples; replaying from a file with
+`-r` adapts `pcap.py`'s frames
 into that same shape before either source reaches `decoder.py`, which
 walks each frame's protocol chain into an immutable `DecodedFrame`.
 Outputs — the screen renderer, the NDJSON stream, the pcap writer, the
