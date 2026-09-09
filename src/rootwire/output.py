@@ -40,6 +40,8 @@ from netprotocols import (
     IPv6HopByHopOptions,
     IPv6Routing,
     Protocol,
+    compute,
+    verify,
 )
 
 from rootwire.frame import DecodedFrame
@@ -80,6 +82,58 @@ def _sanitize_for_terminal(text: str) -> str:
             code = ord(char)
             out.append(f"\\x{code:02x}" if code <= 0xFF else f"\\u{code:04x}")
     return "".join(out)
+
+
+def _trailing_bytes(frame: DecodedFrame, layer: Protocol) -> bytes:
+    """The bytes that followed *layer* on the wire, whether or not
+    anything after it was itself decoded into a further layer —
+    reconstructed from the frame's own raw capture rather than
+    re-serializing subsequent layers, so it is exact regardless of
+    chain depth. Equal to ``frame.payload`` when *layer* is the last
+    decoded layer."""
+    cursor = 0
+    for candidate in frame.layers:
+        cursor += candidate.header_len
+        if candidate is layer:
+            return frame.raw[cursor:]
+    return frame.payload  # pragma: no cover -- layer is always in frame.layers
+
+
+def _is_fragmented(frame: DecodedFrame) -> bool:
+    """Whether this frame is a non-reassembled IP fragment.
+
+    A transport-layer checksum (ICMP/TCP/UDP) covers the *reassembled*
+    datagram; RootWire never reassembles fragments (each renders
+    independently, labeled "first fragment" / "fragment at offset N").
+    Verifying one against a single fragment's bytes would disagree with
+    the wire checksum every time — correctly, but for a reason that has
+    nothing to do with the checksum being wrong, so callers use this to
+    suppress that check rather than flag a false mismatch.
+    """
+    ipv4 = frame.layer(IPv4)
+    if ipv4 is not None and (ipv4.flags & 0b001 or ipv4.fragment_offset > 0):
+        return True
+    return any(isinstance(layer, IPv6Fragment) for layer in frame.layers)
+
+
+def _checksum_note(
+    layer: Protocol, *, ip: IPv4 | IPv6 | None = None, payload: bytes = b""
+) -> str:
+    """A trailing ``" [!] mismatch (expected 0xXXXX)"`` note for a
+    checksum display line, or ``""`` when it verifies.
+
+    Never raises: a checksum this helper cannot compute (most notably,
+    a required enclosing IP layer this frame doesn't have) is treated
+    as unverifiable, not as a mismatch — rendering must never flag a
+    false positive over its own inability to check.
+    """
+    try:
+        if verify(layer, ip=ip, payload=payload):
+            return ""
+        expected = compute(layer, ip=ip, payload=payload)
+    except InvalidFieldError:
+        return ""
+    return f" [!] mismatch (expected {expected:#06x})"
 
 
 class Output(ABC):
@@ -175,7 +229,7 @@ class OutputToScreen(Output):
         )
         self._print(
             f"{_II}Protocol: {layer.protocol_name} | "
-            f"Checksum: {layer.checksum_hex_str}"
+            f"Checksum: {layer.checksum_hex_str}{_checksum_note(layer)}"
             + (
                 f" | Options: {len(layer.options)} bytes"
                 if layer.options
@@ -289,9 +343,18 @@ class OutputToScreen(Output):
         ip = frame.layer(IPv4) if version == 4 else frame.layer(IPv6)
         route = f" {ip.src} -> {ip.dst}" if ip is not None else ""
         self._print(f"{_I}[+] ICMPv{version}{route}")
+        # No pseudo-header for ICMPv4 (compute() ignores ip there); the
+        # ICMPv6 pseudo-header needs the enclosing IPv6 layer. Skipped
+        # entirely for a fragment: the checksum covers the reassembled
+        # message, which this single fragment's bytes never match.
+        note = (
+            ""
+            if _is_fragmented(frame)
+            else _checksum_note(layer, ip=ip if version == 6 else None)
+        )
         self._print(
             f"{_II}Type: {layer.type} ({layer.type_name}) | "
-            f"Code: {layer.code} | Checksum: {layer.checksum_hex_str}"
+            f"Code: {layer.code} | Checksum: {layer.checksum_hex_str}{note}"
         )
 
     @_render.register
@@ -301,9 +364,17 @@ class OutputToScreen(Output):
             f"{_II}Flags: {layer.flags_hex_str} ({layer.flags_str}) | "
             f"Seq: {layer.seq} | Ack: {layer.ack}"
         )
+        ip = frame.layer(IPv4) or frame.layer(IPv6)
+        note = (
+            ""
+            if _is_fragmented(frame)
+            else _checksum_note(
+                layer, ip=ip, payload=_trailing_bytes(frame, layer)
+            )
+        )
         self._print(
             f"{_II}Window: {layer.window} | "
-            f"Checksum: {layer.checksum_hex_str}"
+            f"Checksum: {layer.checksum_hex_str}{note}"
             + (
                 f" | Options: {len(layer.options)} bytes"
                 if layer.options
@@ -314,8 +385,17 @@ class OutputToScreen(Output):
     @_render.register
     def _(self, layer: UDP, frame: DecodedFrame) -> None:
         self._print(f"{_I}[+] UDP {layer.src_port} -> {layer.dst_port}")
+        ip = frame.layer(IPv4) or frame.layer(IPv6)
+        note = (
+            ""
+            if _is_fragmented(frame)
+            else _checksum_note(
+                layer, ip=ip, payload=_trailing_bytes(frame, layer)
+            )
+        )
         self._print(
-            f"{_II}Length: {layer.length} | Checksum: {layer.checksum_hex_str}"
+            f"{_II}Length: {layer.length} | "
+            f"Checksum: {layer.checksum_hex_str}{note}"
         )
 
     @_render.register

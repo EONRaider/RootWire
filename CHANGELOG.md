@@ -64,6 +64,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   RootWire as a library and importing that function by name, not for
   any CLI usage. `-w`/`PcapWriter` are unaffected: NETProtocols ships
   no writer, so `-w` still emits classic pcap only (#77).
+- **Checksum verification rendering** (closes the README's own
+  long-standing Roadmap item). Every IPv4/ICMPv4/ICMPv6/TCP/UDP
+  checksum is now verified against a recomputation via
+  `netprotocols.checksum.verify()`, flagging a mismatch inline (e.g.
+  `Checksum: 0x0000 [!] mismatch (expected 0x1a2b)`) instead of just
+  displaying the on-wire value. Silent (no false positive) for a
+  non-reassembled IP fragment — the wire checksum covers the
+  reassembled datagram, which RootWire never rebuilds, so it can't be
+  verified against a single fragment's bytes without lying (#78).
 
 ## [6.0.0] - 2026-09-09
 

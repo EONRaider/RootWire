@@ -30,11 +30,16 @@ JSON:
 The decoder covers Ethernet (802.1Q VLAN tags, including nested QinQ
 tagging), ARP, IPv4 (options and fragments), IPv6 **including
 extension headers** (an MLD report renders its full Hop-by-Hop chain),
-ICMPv4/v6, TCP (options-aware payload offsets) and UDP. Malformed or
-truncated frames are diagnosed instead of crashing the capture,
-unknown protocols end the chain gracefully, and a 16-layer cap keeps
-crafted extension-header stacks from amplifying — the capture survives
-whatever the network delivers.
+ICMPv4/v6, TCP (options-aware payload offsets) and UDP. Every
+IPv4/ICMPv4/ICMPv6/TCP/UDP checksum is verified against a
+recomputation, flagging a mismatch inline
+(`Checksum: 0x0000 [!] mismatch (expected 0x1a2b)`) — a real signal
+for corrupted or spoofed traffic, silent for a non-reassembled
+fragment, where the wire checksum covers a datagram RootWire never
+rebuilds. Malformed or truncated frames are diagnosed instead of
+crashing the capture, unknown protocols end the chain gracefully, and
+a 16-layer cap keeps crafted extension-header stacks from amplifying —
+the capture survives whatever the network delivers.
 
 ## Installation
 
@@ -116,10 +121,6 @@ through the whole pipeline — needs neither root nor Linux:
 ```
 uv run pytest
 ```
-
-## Roadmap
-
-- Checksum verification rendering (the library already computes them)
 
 ## Contributing
 
