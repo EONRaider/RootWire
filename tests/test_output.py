@@ -1,6 +1,6 @@
 import io
 
-from netprotocols import DNS, UDP, Packet
+from netprotocols import DNS, IGMP, UDP, Packet
 
 from conftest import _eth, _ipv4, ipv4_udp
 from rootwire.decoder import decode_frame
@@ -104,6 +104,33 @@ class TestOutputToScreen:
         assert "Your Addr: 192.168.1.96" in text
         assert "Server Addr: 192.168.1.254" in text
         assert "Options: 3 parsed" in text
+
+    def test_gre_rendering(self, gre_frame):
+        text = render(gre_frame)
+        assert "GRE (protocol: IPv4)" in text
+        assert "Key: 0x0000002a" in text
+
+    def test_igmp_v2_report_rendering(self, igmp_report_frame):
+        text = render(igmp_report_frame)
+        assert "IGMP IGMPv2 Membership Report" in text
+        assert "Group: 224.0.0.251" in text
+
+    def test_igmpv3_report_rendering(self, igmpv3_report_frame):
+        text = render(igmpv3_report_frame)
+        assert "IGMP IGMPv3 Membership Report" in text
+        assert "Record: MODE_IS_EXCLUDE 224.0.0.1" in text
+
+    def test_igmpv3_malformed_body_is_diagnosed(self):
+        """A v3 report declaring one group record (reserved + count),
+        but with no record bytes following, must render a [!]
+        diagnostic instead of raising out of the renderer."""
+        igmp = IGMP(
+            type=0x22, max_resp_code=0, checksum=0, body=b"\x00\x00\x00\x01"
+        )
+        ip = _ipv4(protocol=2, total_length=20 + igmp.header_len)
+        frame = bytes(Packet(_eth(0x0800), ip, igmp))
+        text = render(frame)
+        assert "[!] Body malformed:" in text
 
 
 class TestDNSRendering:
