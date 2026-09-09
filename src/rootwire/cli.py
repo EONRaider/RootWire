@@ -56,7 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="FILE",
         default=None,
         help=(
-            "replay frames from a classic pcap file instead of live "
+            "replay frames from a pcap or pcapng file instead of live "
             "capture (no privileges required); mutually exclusive with -i"
         ),
     )
@@ -118,11 +118,11 @@ def _same_file(a: str, b: str) -> bool:
 async def _replay_source(
     frames: Iterator[tuple[bytes, int]], interface: str
 ) -> AsyncIterator[tuple[bytes, int, str]]:
-    """Adapt :func:`rootwire.pcap.read_pcap`'s sync ``(bytes,
+    """Adapt :func:`rootwire.pcap.read_captures`'s sync ``(bytes,
     timestamp)`` pairs into the async ``(bytes, timestamp, interface)``
     triples :func:`run` expects from every source, tagging every frame
-    with the replayed file's path — a classic pcap file carries no
-    interface metadata of its own.
+    with the replayed file's path — a replayed capture carries no
+    interface metadata RootWire can recover.
 
     The ``await asyncio.sleep(0)`` per frame is not a formality: a bare
     ``for: yield`` loop with no real ``await`` inside never actually
@@ -277,9 +277,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     source: AsyncIterator[tuple[bytes, int, str | None]]
     if args.read is not None:
-        from rootwire.pcap import read_pcap
+        from rootwire.pcap import read_captures
 
-        source = _replay_source(read_pcap(args.read), args.read)
+        source = _replay_source(read_captures(args.read), args.read)
     else:
         from rootwire.capture import capture_async  # Linux-only import
 

@@ -64,7 +64,7 @@ rootwire [-h] [-i INTERFACE] [-r FILE] [-w FILE]
 options:
   -i, --interface   interface to capture frames from; repeat to capture on
                     several interfaces concurrently (default: all interfaces)
-  -r, --read FILE   replay frames from a classic pcap file instead of live
+  -r, --read FILE   replay frames from a pcap or pcapng file instead of live
                     capture (no privileges required; mutually exclusive
                     with -i)
   -w, --write FILE  also write every captured frame to a classic pcap file

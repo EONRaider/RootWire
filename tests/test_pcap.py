@@ -9,7 +9,7 @@ from conftest import FIXTURES, corpus_frames
 from rootwire import cli
 from rootwire.decoder import decode_frame
 from rootwire.output import Output, OutputToPcap
-from rootwire.pcap import PcapWriter, read_pcap
+from rootwire.pcap import PcapWriter, read_captures
 
 FRAMES = [
     b"\xff" * 6 + b"\x00" * 6 + b"\x08\x06" + b"arp-ish",
@@ -20,6 +20,81 @@ FRAMES = [
 #: provides rather than a value that would look the same at either
 #: resolution.
 TIMESTAMPS = [1_787_000_000_123_456_789, 1_787_000_000_999_999_999]
+
+
+def _pcapng_block(block_type: int, body: bytes) -> bytes:
+    """One little-endian pcapng block: type, total length, the body
+    padded to a 4-byte boundary, then the total length again (every
+    pcapng block shares this framing, per the format's spec)."""
+    padded = body + b"\x00" * ((-len(body)) % 4)
+    length = 12 + len(padded)
+    return (
+        struct.pack("<II", block_type, length)
+        + padded
+        + struct.pack("<I", length)
+    )
+
+
+def _build_pcapng(
+    frames: list[tuple[bytes, int]], *, linktype: int = 1
+) -> bytes:
+    """A minimal little-endian pcapng capture: one Section Header
+    Block, one Interface Description Block declaring ``if_tsresol`` as
+    nanoseconds (so the timestamps below round-trip exactly, no
+    resolution scaling to reason about), and one Enhanced Packet Block
+    per ``(data, timestamp_ns)`` pair."""
+    shb = _pcapng_block(0x0A0D0D0A, struct.pack("<IHHq", 0x1A2B3C4D, 1, 0, -1))
+    tsresol_opt = struct.pack("<HHB", 9, 1, 9) + b"\x00" * 3  # 10**-9 = ns
+    end_opt = struct.pack("<HH", 0, 0)
+    idb = _pcapng_block(
+        1, struct.pack("<HHI", linktype, 0, 65_535) + tsresol_opt + end_opt
+    )
+    epbs = b"".join(
+        _pcapng_block(
+            6,
+            struct.pack(
+                "<IIIII",
+                0,
+                (timestamp_ns >> 32) & 0xFFFFFFFF,
+                timestamp_ns & 0xFFFFFFFF,
+                len(data),
+                len(data),
+            )
+            + data,
+        )
+        for data, timestamp_ns in frames
+    )
+    return shb + idb + epbs
+
+
+def _build_pcapng_multi_interface(
+    frame: bytes, *, interface_id: int, linktypes: list[int]
+) -> bytes:
+    """A pcapng capture with one Interface Description Block per entry
+    in *linktypes* (interface ids 0, 1, ...) and one Enhanced Packet
+    Block for *frame* referencing *interface_id* -- for exercising the
+    "a later interface is non-Ethernet" case a first-IDB-only linktype
+    check would miss."""
+    shb = _pcapng_block(0x0A0D0D0A, struct.pack("<IHHq", 0x1A2B3C4D, 1, 0, -1))
+    idbs = b"".join(
+        _pcapng_block(1, struct.pack("<HHI", linktype, 0, 65_535))
+        for linktype in linktypes
+    )
+    epb = _pcapng_block(
+        6,
+        struct.pack("<IIIII", interface_id, 0, 0, len(frame), len(frame))
+        + frame,
+    )
+    return shb + idbs + epb
+
+
+def _build_pcapng_simple_packet(data: bytes, *, linktype: int = 1) -> bytes:
+    """A minimal pcapng capture carrying one Simple Packet Block, which
+    (unlike an Enhanced Packet Block) has no timestamp field at all."""
+    shb = _pcapng_block(0x0A0D0D0A, struct.pack("<IHHq", 0x1A2B3C4D, 1, 0, -1))
+    idb = _pcapng_block(1, struct.pack("<HHI", linktype, 0, 65_535))
+    spb = _pcapng_block(3, struct.pack("<I", len(data)) + data)
+    return shb + idb + spb
 
 
 class TestWriterFormat:
@@ -65,7 +140,7 @@ class TestReader:
         with PcapWriter(path) as writer:
             for frame, timestamp in zip(FRAMES, TIMESTAMPS, strict=True):
                 writer.write(frame, timestamp)
-        replayed = list(read_pcap(path))
+        replayed = list(read_captures(path))
         assert [frame for frame, _ in replayed] == FRAMES
 
     def test_big_endian_and_nanosecond_magic(self, tmp_path):
@@ -94,7 +169,7 @@ class TestReader:
                 )
                 + frame
             )
-            ((replayed, timestamp),) = list(read_pcap(path))
+            ((replayed, timestamp),) = list(read_captures(path))
             assert replayed == frame
             # Both encodings of "half a second past" convert to the same
             # exact integer nanosecond value -- proving the µs->ns and
@@ -107,13 +182,13 @@ class TestReader:
             struct.pack("<IHHiIII", 0xA1B2C3D4, 2, 4, 0, 0, 65_550, 101)
         )
         with pytest.raises(ValueError, match="linktype 101"):
-            list(read_pcap(path))
+            list(read_captures(path))
 
     def test_not_a_pcap_rejected(self, tmp_path):
         path = tmp_path / "not.pcap"
         path.write_bytes(b"PK\x03\x04 definitely a zip" + b"\x00" * 16)
-        with pytest.raises(ValueError, match="not a classic pcap"):
-            list(read_pcap(path))
+        with pytest.raises(ValueError, match="unrecognized capture format"):
+            list(read_captures(path))
 
     def test_truncated_record_diagnosed(self, tmp_path):
         path = tmp_path / "cut.pcap"
@@ -121,19 +196,76 @@ class TestReader:
             writer.write(FRAMES[0], TIMESTAMPS[0])
         path.write_bytes(path.read_bytes()[:-4])
         with pytest.raises(ValueError, match="truncated"):
-            list(read_pcap(path))
+            list(read_captures(path))
+
+
+class TestPcapngReader:
+    """pcapng is read via netprotocols.read_captures (RootWire's own
+    reader/writer never carried its own pcapng implementation) — these
+    exercise auto-detection, exact nanosecond timestamps, and the same
+    linktype gate the classic-pcap tests above cover."""
+
+    def test_pcapng_round_trip(self, tmp_path):
+        path = tmp_path / "capture.pcapng"
+        frames = list(zip(FRAMES, TIMESTAMPS, strict=True))
+        path.write_bytes(_build_pcapng(frames))
+        replayed = list(read_captures(path))
+        assert [frame for frame, _ in replayed] == FRAMES
+        assert [ts for _, ts in replayed] == TIMESTAMPS
+
+    def test_pcapng_non_ethernet_linktype_rejected(self, tmp_path):
+        path = tmp_path / "raw-ip.pcapng"
+        path.write_bytes(
+            _build_pcapng([(FRAMES[0], TIMESTAMPS[0])], linktype=101)
+        )
+        with pytest.raises(ValueError, match="linktype 101"):
+            list(read_captures(path))
+
+    def test_pcapng_non_ethernet_second_interface_rejected(self, tmp_path):
+        """A first-IDB-only linktype check would miss this: interface 0
+        is Ethernet, interface 1 is not, and the only frame present
+        references interface 1 -- the whole capture must still be
+        refused, not just frames that happen to reference interface 0
+        (a review finding on the original single-IDB implementation)."""
+        path = tmp_path / "second-iface-non-ethernet.pcapng"
+        path.write_bytes(
+            _build_pcapng_multi_interface(
+                FRAMES[0], interface_id=1, linktypes=[1, 101]
+            )
+        )
+        with pytest.raises(ValueError, match="linktype 101"):
+            list(read_captures(path))
+
+    def test_pcapng_simple_packet_block_timestamp_is_zero(self, tmp_path):
+        """A Simple Packet Block has no timestamp field at all (RFC
+        draft §4.4) -- netprotocols reports 0 rather than guessing, and
+        that must survive unchanged through RootWire's own reader."""
+        path = tmp_path / "spb.pcapng"
+        path.write_bytes(_build_pcapng_simple_packet(FRAMES[0]))
+        ((frame, timestamp),) = list(read_captures(path))
+        assert frame == FRAMES[0]
+        assert timestamp == 0
+
+    def test_replay_pcapng_through_cli(self, tmp_path, capsys):
+        """The whole -r pipeline, not just the reader function."""
+        path = tmp_path / "capture.pcapng"
+        frames = list(zip(FRAMES, TIMESTAMPS, strict=True))
+        path.write_bytes(_build_pcapng(frames))
+        assert cli.main(["-r", str(path)]) == 0
+        captured = capsys.readouterr()
+        assert captured.out.count("Frame #") == len(FRAMES)
 
 
 class TestCorpusReplay:
     def test_every_corpus_pcap_replays_through_the_pipeline(self):
-        """read_pcap must agree with the independent test reader and
+        """read_captures must agree with the independent test reader and
         feed the decoder cleanly — the corpus doubles as the replay
         golden set."""
         expected = {}
         for name, _, frame in corpus_frames():
             expected.setdefault(name, []).append(frame)
         for pcap in sorted(FIXTURES.glob("*.pcap")):
-            replayed = list(read_pcap(pcap))
+            replayed = list(read_captures(pcap))
             assert [f for f, _ in replayed] == expected[pcap.name]
             for number, (data, timestamp) in enumerate(replayed, start=1):
                 frame = decode_frame(
@@ -155,7 +287,7 @@ class TestCaptureToPcapOutput:
         )
         output.update(frame)
         output.close()
-        ((replayed, _),) = list(read_pcap(path))
+        ((replayed, _),) = list(read_captures(path))
         assert replayed == arp_frame
 
 
@@ -171,8 +303,8 @@ class TestCLIReplay:
         source = FIXTURES / "udp_dns.pcap"
         copy = tmp_path / "copy.pcap"
         assert cli.main(["-r", str(source), "-w", str(copy)]) == 0
-        assert [f for f, _ in read_pcap(copy)] == [
-            f for f, _ in read_pcap(source)
+        assert [f for f, _ in read_captures(copy)] == [
+            f for f, _ in read_captures(source)
         ]
 
     def test_read_and_interface_are_exclusive(self):

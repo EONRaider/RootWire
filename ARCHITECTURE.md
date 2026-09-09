@@ -14,7 +14,7 @@ One frame flows from a source, through the decoder, to every output:
 ```mermaid
 flowchart LR
   S[AF_PACKET socket per interface] -->|bytes| C[capture.py capture_async]
-  F[pcap file] -->|bytes| P[pcap.py read_pcap]
+  F[pcap/pcapng file] -->|bytes| P[pcap.py read_captures]
   C -->|"bytes + timestamp + interface"| D[decoder.py]
   P -->|"bytes + timestamp"| A[cli.py _replay_source]
   A -->|"bytes + timestamp + interface"| D
@@ -48,16 +48,21 @@ flowchart LR
   `tests/bpf_vm.py` is a small cBPF interpreter that runs both this
   compiler's output and real `tcpdump -dd` bytecode against the
   project's captured-frame corpus and asserts they always agree.
-- **[`pcap.py`](src/rootwire/pcap.py)** reads and writes classic pcap,
-  dependency-free. `read_pcap()` yields `(bytes, timestamp)` pairs;
-  `cli.py`'s `_replay_source()` adapts that into the same
+- **[`pcap.py`](src/rootwire/pcap.py)** writes classic pcap by hand and
+  reads classic pcap *or* pcapng via NETProtocols'
+  `read_captures()` (auto-detected from magic bytes). RootWire's own
+  `read_captures()` yields `(bytes, timestamp)` pairs; `cli.py`'s
+  `_replay_source()` adapts that into the same
   `(bytes, timestamp, interface)` shape `capture_async()` produces —
-  tagging every replayed frame with the file's path, since a classic
-  pcap file carries no interface metadata of its own — so `-r FILE` is
-  a drop-in frame source and the whole pipeline runs against a file,
-  no privileges needed. The reader handles both byte orders and
-  nanosecond-precision files, and refuses non-Ethernet linktypes
-  (nothing else can be fed to an Ethernet decoder).
+  tagging every replayed frame with the file's path, since a replayed
+  capture carries no interface metadata RootWire can recover — so
+  `-r FILE` is a drop-in frame source and the whole pipeline runs
+  against a file, no privileges needed. Before decoding, the capture's
+  declared link type is checked against Ethernet where it can be
+  determined up front (always for classic pcap; every Interface
+  Description Block for pcapng, since an Enhanced Packet Block can
+  reference any of them), since nothing else stops a wrong link type
+  from silently decoding into nonsense.
 - **[`decoder.py`](src/rootwire/decoder.py)** turns one frame's bytes
   into a `DecodedFrame` — a pure function with no state between calls.
 - **[`frame.py`](src/rootwire/frame.py)** defines `DecodedFrame`:
@@ -99,10 +104,13 @@ so the memory story is engineered, not accidental:
 1. `capture_async()` yields **one freshly allocated, immutable `bytes`
    object per frame** — never a reused buffer. Nothing that happens
    later can be corrupted by the next `recvmsg`.
-2. `decode_frame()` wraps it in a `memoryview` so walking the layers
-   slices without copying; every value it *keeps* (fields, options,
-   payload) is materialized, and `frame.raw` simply holds the original
-   object. The view dies with the function call.
+2. `decode_frame()` hands the `bytes` object straight to
+   `netprotocols.decode_frame()`, which walks the layers — NETProtocols
+   measured plain-`bytes` slicing as faster than a RootWire-side
+   `memoryview` wrap for a single small frame, so this function no
+   longer does its own wrapping. Every value the walk *keeps* (fields,
+   options, payload) is materialized, and `frame.raw` simply holds the
+   original object.
 3. The resulting `DecodedFrame` is **immutable and self-contained**:
    no references to sockets or capture buffers. An earlier design
    reused one mutable decoder object per capture; any consumer that
@@ -132,9 +140,11 @@ as exceptions to die on:
   chain walks straight through it into whatever it encapsulates,
   including nested (QinQ) tags.
 - **Malformed header?** The library raises a typed `ProtocolError`
-  (truncated buffer, lying length field). `decode_frame()` catches it,
-  keeps the layers that did decode, and records the diagnostic on
-  `frame.error`. The capture continues.
+  (truncated buffer, lying length field). `decode_frame()` calls the
+  library's own `decode_frame()` with `lax=True`, which keeps the
+  layers that did decode instead of propagating the exception;
+  RootWire's `decode_frame()` records the diagnostic on `frame.error`.
+  The capture continues.
 - **Truncated datagram?** If the IP layer declares more bytes than
   were captured, `frame.truncated` is set and the renderer says so.
 - **Crafted amplification?** The decode chain is capped at 16 layers
@@ -183,7 +193,7 @@ The suite runs recorded traffic, not sockets. Its backbone is a
 the NETProtocols repository, where every frame's checksums were
 verified before being committed. Corpus tests drive each frame through
 decode *and* render; the pcap tests replay every corpus file through
-`read_pcap` and cross-validate it against an independent reader; the
+`read_captures` and cross-validate it against an independent reader; the
 rest covers payload offsets with TCP options, unknown EtherTypes,
 truncation diagnostics, fragment labeling, NDJSON schema and stdout
 purity, statistics bucketing, and buffer-aliasing regressions.
