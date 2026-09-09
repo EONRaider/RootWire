@@ -6,7 +6,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- The new DNS renderer (below) now neutralizes terminal control
+  characters in question/answer names and RDATA, the same way `-d`'s
+  payload display already does — a DNS name is fully attacker-controlled
+  (whatever a queried server answers), and rendering it unsanitized
+  would let a crafted response inject ANSI escape sequences into the
+  analyst's terminal. Caught by review before merge (#75).
+
+### Changed
+- **`decoder.py` now delegates its chain walk to `netprotocols.decode_frame()`
+  instead of hand-rolling the same loop the library has shipped since
+  2.0.** No behavior change for well-formed frames. The layer-cap
+  diagnostic's wording changed to match the library's own
+  `MaxDepthExceededError` message (`DecodedFrame.error` now reads
+  "chain still going after N headers (...)" instead of "decode chain
+  exceeded N layers"); every other error message is unchanged, since
+  each already names its own protocol in its text (#74).
+- Replay's non-Ethernet-linktype rejection (previously classic-pcap
+  only) now also covers pcapng, checked against *every* declared
+  Interface Description Block before any frame is decoded — an
+  Enhanced Packet Block can reference any interface a preceding IDB
+  declared, not just the first one, so checking only the first would
+  miss a crafted file mixing an Ethernet IDB with a non-Ethernet one.
+  Nothing else stops a wrong link type from silently decoding into
+  nonsense, since `Ethernet` accepts any 14+ bytes structurally (#77).
+
 ### Added
+- **Screen renderers for DNS, DNS-over-TCP, and DHCP.** These already
+  decoded correctly (chain dispatch is registry-driven, not a RootWire
+  whitelist) but printed as the generic `"(no renderer)"` placeholder
+  on screen. DNS now shows the query/response direction, opcode/RCODE,
+  and every question and answer (name, type, TTL, decoded RDATA); DHCP
+  shows the message type, client MAC, the four address fields, and a
+  parsed-option count. Both surface a `[!]` diagnostic instead of
+  raising if their on-demand-parsed sections (DNS records, DHCP
+  options) turn out malformed — these are parsed lazily on first
+  access, unlike every previously-rendered protocol, which validates
+  fully at decode time (#75).
+- **Screen renderers for GRE and IGMP.** Both already decoded correctly
+  (chain dispatch is registry-driven, not a RootWire whitelist) but
+  printed as the generic `"(no renderer)"` placeholder on screen. GRE
+  now shows the encapsulated EtherType and which optional
+  checksum/key/sequence fields are present; IGMP shows the message
+  type, and either the multicast group (query/v1/v2 report/leave) or
+  every group record (a v3 report), each with its record type and
+  source-address list. IGMP's body-parsing accessors surface a `[!]`
+  diagnostic instead of raising if malformed, matching the DNS/DHCP
+  renderers' contract for the same reason: parsed on demand, not
+  validated at decode time (#76).
 - **`-r/--read` now replays pcapng captures, not just classic pcap.**
   RootWire's own reader was classic-pcap-only (an explicit descope of
   the original pcap/replay work); the read path now delegates to
@@ -16,16 +64,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   RootWire as a library and importing that function by name, not for
   any CLI usage. `-w`/`PcapWriter` are unaffected: NETProtocols ships
   no writer, so `-w` still emits classic pcap only (#77).
-
-### Changed
-- Replay's non-Ethernet-linktype rejection (previously classic-pcap
-  only) now also covers pcapng, checked against *every* declared
-  Interface Description Block before any frame is decoded — an
-  Enhanced Packet Block can reference any interface a preceding IDB
-  declared, not just the first one, so checking only the first would
-  miss a crafted file mixing an Ethernet IDB with a non-Ethernet one.
-  Nothing else stops a wrong link type from silently decoding into
-  nonsense, since `Ethernet` accepts any 14+ bytes structurally (#77).
 
 ## [6.0.0] - 2026-09-09
 
