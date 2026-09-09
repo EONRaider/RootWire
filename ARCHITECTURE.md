@@ -126,8 +126,11 @@ as exceptions to die on:
 
 - **Unknown protocol?** The library's `next_protocol()` returns
   `None`, the chain ends, and the remaining bytes become the frame's
-  payload. An LLDP or VLAN-tagged frame renders as Ethernet plus
-  payload instead of an error.
+  payload. An LLDP frame renders as Ethernet plus payload instead of
+  an error. A VLAN tag, by contrast, is not an unknown protocol at
+  all: it is its own decoded layer (`Ethernet / VLAN / ...`), and the
+  chain walks straight through it into whatever it encapsulates,
+  including nested (QinQ) tags.
 - **Malformed header?** The library raises a typed `ProtocolError`
   (truncated buffer, lying length field). `decode_frame()` catches it,
   keeps the layers that did decode, and records the diagnostic on
