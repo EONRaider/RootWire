@@ -144,4 +144,4 @@ class TestChainHardening:
         frame = decode(bytes(eth) + bytes(ip) + chain)
         assert len(frame.layers) == 16
         assert frame.error is not None
-        assert "exceeded 16 layers" in frame.error
+        assert "still going after 16 headers" in frame.error

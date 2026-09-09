@@ -9,7 +9,8 @@ delivers.
 
 from __future__ import annotations
 
-from netprotocols import Ethernet, IPv4, IPv6, Protocol, ProtocolError
+from netprotocols import IPv4, IPv6, Protocol
+from netprotocols import decode_frame as _decode_chain
 
 from rootwire.frame import DecodedFrame
 
@@ -64,32 +65,20 @@ def decode_frame(
 ) -> DecodedFrame:
     """Decode one captured frame.
 
-    Walks the protocol chain from Ethernet inward, each decoded header
-    telling the walker how many bytes it consumed (``header_len``) and
-    which class decodes what follows (``next_protocol()``). The walk
-    ends at the first protocol the library does not implement — the
-    remainder becomes the frame's payload — or at the first malformed
-    header, recorded on ``DecodedFrame.error``.
+    Delegates the chain walk to :func:`netprotocols.decode_frame`
+    (``lax=True``): it walks Ethernet inward the same way this function
+    used to hand-roll, but also carries a bounded depth and a
+    structured :class:`~netprotocols.ProtocolError` on early stop,
+    instead of a loop RootWire maintained in parallel with the
+    library's own. The walk ends at the first protocol the library does
+    not implement — the remainder becomes the frame's payload — or at
+    the first malformed header, recorded on ``DecodedFrame.error``.
     """
-    view = memoryview(data)
-    layers: list[Protocol] = []
-    cursor = 0
-    error: str | None = None
-    protocol: type[Protocol] | None = Ethernet
-    while protocol is not None:
-        if len(layers) >= _MAX_LAYERS:
-            error = f"decode chain exceeded {_MAX_LAYERS} layers"
-            break
-        try:
-            header = protocol.decode(view[cursor:])
-        except ProtocolError as e:
-            error = f"{protocol.__name__}: {e}"
-            break
-        layers.append(header)
-        cursor += header.header_len
-        protocol = header.next_protocol()
+    packet = _decode_chain(data, lax=True, max_depth=_MAX_LAYERS)
+    decoded_layers = packet.layers
+    cursor = packet.consumed
+    error = None if packet.stopped_by is None else str(packet.stopped_by)
 
-    decoded_layers = tuple(layers)
     declared = _declared_length(decoded_layers)
     return DecodedFrame(
         number=number,
@@ -97,7 +86,7 @@ def decode_frame(
         interface=interface,
         length=len(data),
         layers=decoded_layers,
-        payload=bytes(view[cursor:]),
+        payload=data[cursor:],
         truncated=declared is not None and declared > len(data),
         malformed_length=_ip_length_malformed(decoded_layers),
         error=error,
