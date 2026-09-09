@@ -25,8 +25,13 @@ flowchart LR
 ```
 
 - **[`capture.py`](src/rootwire/capture.py)** opens a raw `AF_PACKET`
-  socket (every EtherType, one interface or all) and yields
-  `(bytes, timestamp)` pairs forever.
+  socket (every EtherType, one interface or all), optionally attaches
+  a kernel-side capture filter, and yields `(bytes, timestamp)` pairs
+  forever.
+- **[`bpf.py`](src/rootwire/bpf.py)** holds the canned classic-BPF
+  (cBPF) programs `--filter` selects from and the `SO_ATTACH_FILTER`
+  plumbing `capture.py` calls into. Each canned program's bytecode is
+  a golden fixture, checked byte-for-byte against `tcpdump -dd`.
 - **[`pcap.py`](src/rootwire/pcap.py)** reads and writes classic pcap,
   dependency-free. `read_pcap()` deliberately has **the same shape as
   `capture()`**, so `-r FILE` is a drop-in frame source — the whole

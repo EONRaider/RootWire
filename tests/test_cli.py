@@ -1,12 +1,18 @@
+import ctypes
 import shutil
 import signal
+import struct
+from typing import ClassVar
 
 import pytest
 
 import rootwire.capture as capture_mod
 from conftest import FIXTURES
 from rootwire import __version__, cli
+from rootwire.bpf import CANNED_FILTERS, SockFilter, _SockFprog
 from rootwire.cli import build_parser
+
+_INSTRUCTION = struct.Struct("=HBBI")
 
 
 class TestCLI:
@@ -25,6 +31,80 @@ class TestCLI:
             build_parser().parse_args(["--version"])
         assert excinfo.value.code == 0
         assert __version__ in capsys.readouterr().out
+
+
+class _RecordingSocket:
+    """Fake capture socket that resolves every attached filter program
+    back to its instructions and ends the capture loop on its first
+    recvmsg() -- no real frame is needed to test that the filter was
+    plumbed through correctly.
+
+    A ``sock_fprog``'s ``filter`` field is a raw pointer, valid only
+    for as long as the ``FilterProgram`` that built it is alive --
+    which is exactly the duration of this call, since ``capture()``'s
+    generator frame still holds it. So the pointer is dereferenced
+    right here, synchronously, into a plain tuple that safely outlives
+    the call, rather than keeping the raw ``sock_fprog`` bytes (whose
+    embedded pointer is meaningless once the buffer is freed, and
+    differs across otherwise-identical ``FilterProgram`` instances
+    regardless).
+    """
+
+    attached_programs: ClassVar[list[tuple[SockFilter, ...]]] = []
+
+    def __init__(self, *args: int) -> None:
+        pass
+
+    def setsockopt(self, level: int, optname: int, value: int | bytes) -> None:
+        if optname == capture_mod.SO_ATTACH_FILTER:
+            assert isinstance(value, bytes)
+            fprog = _SockFprog.from_buffer_copy(value)
+            raw = ctypes.string_at(fprog.filter, fprog.len * _INSTRUCTION.size)
+            _RecordingSocket.attached_programs.append(
+                tuple(
+                    _INSTRUCTION.unpack_from(raw, i * _INSTRUCTION.size)
+                    for i in range(fprog.len)
+                )
+            )
+
+    def bind(self, address: tuple[str, int]) -> None:
+        pass
+
+    def recvmsg(
+        self, bufsize: int, ancbufsize: int
+    ) -> tuple[bytes, list, int, None]:
+        raise KeyboardInterrupt
+
+    def __enter__(self) -> "_RecordingSocket":
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+
+class TestFilterFlag:
+    def test_canned_filter_names_are_valid_choices(self):
+        for name in CANNED_FILTERS:
+            args = build_parser().parse_args(["--filter", name])
+            assert args.filter == name
+
+    def test_unknown_filter_name_is_rejected(self):
+        with pytest.raises(SystemExit) as excinfo:
+            build_parser().parse_args(["--filter", "not-a-real-filter"])
+        assert excinfo.value.code == 2
+
+    def test_read_and_filter_are_exclusive(self):
+        with pytest.raises(SystemExit) as excinfo:
+            cli.main(["-r", "x.pcap", "--filter", "tcp"])
+        assert excinfo.value.code == 2
+
+    def test_filter_is_attached_to_the_capture_socket(self, monkeypatch):
+        _RecordingSocket.attached_programs = []
+        monkeypatch.setattr(capture_mod, "socket", _RecordingSocket)
+
+        assert cli.main(["-i", "eth0", "--filter", "tcp"]) == 0
+
+        assert _RecordingSocket.attached_programs == [CANNED_FILTERS["tcp"]]
 
 
 class TestSameFileGuard:

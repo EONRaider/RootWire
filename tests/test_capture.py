@@ -13,6 +13,7 @@ import struct
 from itertools import islice
 
 import rootwire.capture as capture_mod
+from rootwire.bpf import CANNED_FILTERS, FilterProgram
 from rootwire.capture import (
     BUFFER_SIZE,
     SCM_TIMESTAMPNS,
@@ -38,7 +39,7 @@ class _FakeSocket:
     def __init__(self, *args: int) -> None:
         self.init_args = args
         self.bind_args: tuple[str, int] | None = None
-        self.setsockopt_calls: list[tuple[int, int, int]] = []
+        self.setsockopt_calls: list[tuple[int, int, int | bytes]] = []
         self.recvmsg_calls: list[tuple[int, int]] = []
         self.closed = False
         self._frames: list[tuple[bytes, list]] = [
@@ -48,7 +49,7 @@ class _FakeSocket:
         ]
         self._index = 0
 
-    def setsockopt(self, level: int, optname: int, value: int) -> None:
+    def setsockopt(self, level: int, optname: int, value: int | bytes) -> None:
         self.setsockopt_calls.append((level, optname, value))
 
     def bind(self, address: tuple[str, int]) -> None:
@@ -143,6 +144,34 @@ class TestCapture:
 
         assert frame == b"\xaa\xbb"
         assert timestamp == 999
+
+
+class TestCaptureWithFilter:
+    def test_no_filter_program_attaches_nothing(self, monkeypatch):
+        created = _install_fake_socket(monkeypatch)
+
+        next(iter(capture("eth0")))
+
+        sock = created["sock"]
+        assert sock.setsockopt_calls == [
+            (SOL_SOCKET, capture_mod.SO_TIMESTAMPNS, 1)
+        ]
+
+    def test_filter_program_is_attached_and_locked_before_binding(
+        self, monkeypatch
+    ):
+        created = _install_fake_socket(monkeypatch)
+        program = FilterProgram(CANNED_FILTERS["tcp"])
+
+        next(iter(capture("eth0", program)))
+
+        sock = created["sock"]
+        assert sock.setsockopt_calls == [
+            (SOL_SOCKET, capture_mod.SO_TIMESTAMPNS, 1),
+            (SOL_SOCKET, capture_mod.SO_ATTACH_FILTER, program.as_bytes()),
+            (SOL_SOCKET, capture_mod.SO_LOCK_FILTER, 1),
+        ]
+        assert sock.bind_args == ("eth0", 0)  # filter attached before bind
 
 
 class TestParseTimestamp:

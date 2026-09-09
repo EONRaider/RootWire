@@ -20,6 +20,8 @@ from socket import (
     socket,
 )
 
+from rootwire.bpf import SO_ATTACH_FILTER, SO_LOCK_FILTER, FilterProgram
+
 __all__ = ["BUFFER_SIZE", "capture"]
 
 #: Every EtherType (linux/if_ether.h).
@@ -65,7 +67,9 @@ def _parse_timestamp(ancdata: list[tuple[int, int, bytes]]) -> int | None:
     return None
 
 
-def capture(interface: str | None) -> Iterator[tuple[bytes, int]]:
+def capture(
+    interface: str | None, filter_program: FilterProgram | None = None
+) -> Iterator[tuple[bytes, int]]:
     """Yield ``(frame, timestamp)`` pairs from a raw socket, forever.
 
     Each frame is one freshly allocated, immutable ``bytes`` object —
@@ -80,11 +84,23 @@ def capture(interface: str | None) -> Iterator[tuple[bytes, int]]:
 
     :param interface: Interface to bind to, or ``None`` to capture on
         all interfaces.
+    :param filter_program: A compiled cBPF program to attach
+        (``SO_ATTACH_FILTER``) before binding, so non-matching frames
+        are dropped in the kernel and never reach userspace. ``None``
+        captures everything, as before.
     :raises PermissionError: If the process lacks the privileges for a
         raw socket (root or ``CAP_NET_RAW``).
     """
     with socket(PF_PACKET, SOCK_RAW, htons(_ETH_P_ALL)) as sock:
         sock.setsockopt(SOL_SOCKET, SO_TIMESTAMPNS, 1)
+        if filter_program is not None:
+            sock.setsockopt(
+                SOL_SOCKET, SO_ATTACH_FILTER, filter_program.as_bytes()
+            )
+            # Defence in depth: once a filter is attached, nothing on
+            # this socket should ever replace or remove it for the
+            # rest of its lifetime.
+            sock.setsockopt(SOL_SOCKET, SO_LOCK_FILTER, 1)
         if interface is not None:
             sock.bind((interface, 0))
         while True:
