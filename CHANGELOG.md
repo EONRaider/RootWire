@@ -6,7 +6,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- The new DNS renderer (below) now neutralizes terminal control
+  characters in question/answer names and RDATA, the same way `-d`'s
+  payload display already does — a DNS name is fully attacker-controlled
+  (whatever a queried server answers), and rendering it unsanitized
+  would let a crafted response inject ANSI escape sequences into the
+  analyst's terminal. Caught by review before merge (#75).
+
+### Changed
+- **`decoder.py` now delegates its chain walk to `netprotocols.decode_frame()`
+  instead of hand-rolling the same loop the library has shipped since
+  2.0.** No behavior change for well-formed frames. The layer-cap
+  diagnostic's wording changed to match the library's own
+  `MaxDepthExceededError` message (`DecodedFrame.error` now reads
+  "chain still going after N headers (...)" instead of "decode chain
+  exceeded N layers"); every other error message is unchanged, since
+  each already names its own protocol in its text (#74).
+
 ### Added
+- **Screen renderers for DNS, DNS-over-TCP, and DHCP.** These already
+  decoded correctly (chain dispatch is registry-driven, not a RootWire
+  whitelist) but printed as the generic `"(no renderer)"` placeholder
+  on screen. DNS now shows the query/response direction, opcode/RCODE,
+  and every question and answer (name, type, TTL, decoded RDATA); DHCP
+  shows the message type, client MAC, the four address fields, and a
+  parsed-option count. Both surface a `[!]` diagnostic instead of
+  raising if their on-demand-parsed sections (DNS records, DHCP
+  options) turn out malformed — these are parsed lazily on first
+  access, unlike every previously-rendered protocol, which validates
+  fully at decode time (#75).
 - **Screen renderers for GRE and IGMP.** Both already decoded correctly
   (chain dispatch is registry-driven, not a RootWire whitelist) but
   printed as the generic `"(no renderer)"` placeholder on screen. GRE

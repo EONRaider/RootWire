@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from netprotocols import (
     ARP,
+    DHCP,
     GRE,
     IGMP,
     TCP,
@@ -131,6 +132,41 @@ def icmpv6_frame() -> bytes:
         dst="ff02::1",
     )
     return bytes(Packet(_eth(0x86DD), ip, icmp))
+
+
+@pytest.fixture
+def dhcp_frame() -> bytes:
+    """A DHCPACK (server -> client): message-type, subnet-mask and
+    server-identifier options, terminated by the End option. No real
+    capture carries DHCP (see fixtures/MANIFEST.md), so this is
+    hand-built the same way the other synthetic fixtures above are."""
+    options = (
+        b"\x63\x82\x53\x63"  # magic cookie
+        + bytes([53, 1, 5])  # message type: ACK
+        + bytes([1, 4])
+        + b"\xff\xff\xff\x00"  # subnet mask
+        + bytes([54, 4])
+        + b"\xc0\xa8\x01\xfe"  # server identifier
+        + b"\xff"  # end
+    )
+    dhcp = DHCP(
+        op=2,
+        htype=1,
+        hlen=6,
+        hops=0,
+        xid=0x3903F326,
+        secs=0,
+        flags=0,
+        ciaddr="0.0.0.0",
+        yiaddr="192.168.1.96",
+        siaddr="192.168.1.254",
+        giaddr="0.0.0.0",
+        chaddr=bytes.fromhex("00070daff454") + b"\x00" * 10,
+        options=options,
+    )
+    udp = UDP(src_port=67, dst_port=68, length=8 + dhcp.header_len, checksum=0)
+    ip = _ipv4(protocol=17, total_length=20 + 8 + dhcp.header_len)
+    return bytes(Packet(_eth(0x0800), ip, udp, dhcp))
 
 
 @pytest.fixture
