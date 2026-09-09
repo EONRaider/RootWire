@@ -96,6 +96,23 @@ class TestOutputToScreen:
         assert "Malformed: IPv4 total_length (4)" in text
         assert "smaller than its header (20 bytes)" in text
 
+    def test_dhcp_rendering(self, dhcp_frame):
+        text = render(dhcp_frame)
+        assert "DHCP ACK" in text
+        assert "Your Addr: 192.168.1.96" in text
+        assert "Server Addr: 192.168.1.254" in text
+        assert "Options: 3 parsed" in text
+
+
+class TestDNSRendering:
+    def test_dns_response_renders_questions_and_answers(self, request):
+        from conftest import FIXTURES, read_pcap
+
+        pcap = FIXTURES / "udp_dns.pcap"
+        texts = [render(frame) for frame in read_pcap(pcap)]
+        assert any("DNS response" in text for text in texts)
+        assert any("A: " in text for text in texts)
+
 
 class TestExtensionHeaderRendering:
     def test_mld_frame_renders_hop_by_hop(self, request):

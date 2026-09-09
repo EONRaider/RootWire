@@ -21,12 +21,16 @@ from typing import IO, Any, cast
 
 from netprotocols import (
     ARP,
+    DHCP,
+    DNS,
     TCP,
     UDP,
     VLAN,
+    DNSOverTCP,
     Ethernet,
     ICMPv4,
     ICMPv6,
+    InvalidFieldError,
     IPv4,
     IPv6,
     IPv6DestinationOptions,
@@ -275,6 +279,57 @@ class OutputToScreen(Output):
         self._print(
             f"{_II}Length: {layer.length} | Checksum: {layer.checksum_hex_str}"
         )
+
+    @_render.register
+    def _(self, layer: DNS, frame: DecodedFrame) -> None:
+        direction = "response" if layer.qr else "query"
+        self._print(f"{_I}[+] DNS {direction} (id {layer.transaction_id:#06x})")
+        self._print(
+            f"{_II}Flags: {layer.flags_hex_str} | Opcode: {layer.opcode} | "
+            f"RCODE: {layer.rcode}"
+        )
+        try:
+            questions = layer.questions
+            answers = layer.answers
+        except InvalidFieldError as error:
+            self._print(f"{_II}[!] Records malformed: {error}")
+            return
+        for question in questions:
+            self._print(f"{_II}Q: {question.name} (type {question.qtype})")
+        for answer in answers:
+            self._print(
+                f"{_II}A: {answer.name} {answer.rtype_name} "
+                f"{answer.ttl}s -> {answer.rdata_text}"
+            )
+
+    @_render.register
+    def _(self, layer: DNSOverTCP, frame: DecodedFrame) -> None:
+        self._print(
+            f"{_I}[+] DNS over TCP "
+            f"(message length: {layer.message_length} bytes)"
+        )
+
+    @_render.register
+    def _(self, layer: DHCP, frame: DecodedFrame) -> None:
+        try:
+            message_type = layer.message_type_name
+        except InvalidFieldError:
+            message_type = None
+        self._print(f"{_I}[+] DHCP {message_type or layer.op_name}")
+        self._print(
+            f"{_II}Client: {layer.client_mac or 'n/a'} | XID: {layer.xid:#010x}"
+        )
+        self._print(
+            f"{_II}Client Addr: {layer.ciaddr} | Your Addr: {layer.yiaddr} | "
+            f"Server Addr: {layer.siaddr} | Gateway Addr: {layer.giaddr}"
+        )
+        try:
+            option_count = len(layer.parsed_options)
+        except InvalidFieldError as error:
+            self._print(f"{_II}[!] Options malformed: {error}")
+        else:
+            if option_count:
+                self._print(f"{_II}Options: {option_count} parsed")
 
     @_render.register
     def _(self, layer: VLAN, frame: DecodedFrame) -> None:

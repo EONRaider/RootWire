@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Screen renderers for DNS, DNS-over-TCP, and DHCP.** These already
+  decoded correctly (chain dispatch is registry-driven, not a RootWire
+  whitelist) but printed as the generic `"(no renderer)"` placeholder
+  on screen. DNS now shows the query/response direction, opcode/RCODE,
+  and every question and answer (name, type, TTL, decoded RDATA); DHCP
+  shows the message type, client MAC, the four address fields, and a
+  parsed-option count. Both surface a `[!]` diagnostic instead of
+  raising if their on-demand-parsed sections (DNS records, DHCP
+  options) turn out malformed — these are parsed lazily on first
+  access, unlike every previously-rendered protocol, which validates
+  fully at decode time (#75).
+
 ## [6.0.0] - 2026-09-09
 
 RootWire's own dependency, [NETProtocols](https://github.com/EONRaider/NETProtocols),
