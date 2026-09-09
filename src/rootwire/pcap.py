@@ -1,4 +1,4 @@
-"""Classic pcap file writing and replay, dependency-free.
+"""pcap/pcapng file writing and replay.
 
 The writer emits the classic (not pcapng) format: a 24-byte global
 header — magic ``0xA1B23C4D``, version 2.4, thiszone 0, sigfigs 0,
@@ -10,12 +10,20 @@ reads, and it is what makes the kernel-timestamp precision RootWire
 captures (``SO_TIMESTAMPNS``) survive to disk losslessly instead of
 being rounded to microseconds on write.
 
-The reader accepts both byte orders and both timestamp precisions
-(including foreign/older microsecond-precision captures), validates
-that the file carries Ethernet frames before handing them to an
-Ethernet decoder, and deliberately has the same shape as
-:func:`rootwire.capture.capture` — so replaying a file is a drop-in
-frame source for the whole pipeline, no root required.
+The reader accepts classic pcap *and* pcapng, auto-detected from the
+file's magic bytes, by delegating to
+:func:`netprotocols.read_captures` — timestamp normalization to
+nanoseconds (including foreign/older microsecond-precision classic
+captures, and pcapng's per-interface timestamp resolution) happens
+there. Before decoding, this module checks the capture's declared link
+type against Ethernet where it can be determined up front (always for
+classic pcap; the first Interface Description Block for pcapng) and
+rejects anything else: :class:`~netprotocols.Ethernet` accepts any
+14+ bytes structurally, so nothing else stops a wrong link type from
+silently decoding into nonsense. Reading otherwise deliberately has the
+same shape as :func:`rootwire.capture.capture_async` — so replaying a
+file is a drop-in frame source for the whole pipeline, no root
+required.
 
 ``orig_len`` is written equal to ``incl_len``: a frame delivered by
 ``recv()`` carries no record of a kernel-side truncation, so the
@@ -31,7 +39,10 @@ from pathlib import Path
 from types import TracebackType
 from typing import BinaryIO, Self
 
-__all__ = ["PcapWriter", "read_pcap"]
+from netprotocols import MalformedCaptureError
+from netprotocols import read_captures as _read_captures
+
+__all__ = ["PcapWriter", "read_captures"]
 
 #: Matches capture.BUFFER_SIZE without importing that module — capture
 #: is the one Linux-only module (PF_PACKET), and replaying a file must
@@ -43,6 +54,62 @@ _MAGIC_NANOSECONDS = 0xA1B23C4D
 _LINKTYPE_ETHERNET = 1
 _GLOBAL_HEADER = struct.Struct("<IHHiIII")
 _RECORD_HEADER = struct.Struct("<IIII")
+
+#: Classic-pcap magic numbers, either byte order, either timestamp
+#: resolution — matches what netprotocols.read_pcap itself recognizes.
+_PCAP_MAGICS = (
+    b"\xa1\xb2\xc3\xd4",
+    b"\xd4\xc3\xb2\xa1",
+    b"\xa1\xb2\x3c\x4d",
+    b"\x4d\x3c\xb2\xa1",
+)
+_PCAP_MAGICS_LE = (b"\xd4\xc3\xb2\xa1", b"\x4d\x3c\xb2\xa1")
+
+#: pcapng Section Header Block's type field — a byte-order-independent
+#: palindrome, so it is recognizable before any endianness is known.
+_SHB_TYPE = b"\x0a\x0d\x0d\x0a"
+_SHB_BOM = 0x1A2B3C4D
+_IDB_TYPE = 1
+
+
+def _pcapng_first_linktype(data: bytes) -> int | None:
+    """The ``LinkType`` field of the first Interface Description Block
+    in a pcapng buffer, or ``None`` if none is found before the buffer
+    ends (an interface-free capture, or a truncated one — either way,
+    not this function's job to diagnose; :func:`read_captures` does).
+
+    Only the first section is examined: enough for the up-front
+    linktype gate this exists for, and a capture legitimately mixing
+    link types across sections is not a case a single-shot replay tool
+    needs to get right.
+    """
+    if len(data) < 12 or data[:4] != _SHB_TYPE:
+        return None
+    endian = "<" if data[8:12] == struct.pack("<I", _SHB_BOM) else ">"
+    cursor = 0
+    while cursor + 8 <= len(data):
+        block_type, block_len = struct.unpack_from(f"{endian}II", data, cursor)
+        if block_len < 12 or cursor + block_len > len(data):
+            return None
+        if block_type == _IDB_TYPE and block_len >= 16:
+            (link_type,) = struct.unpack_from(f"{endian}H", data, cursor + 8)
+            return int(link_type)
+        cursor += block_len
+    return None
+
+
+def _declared_linktype(data: bytes) -> int | None:
+    """The capture's declared link type, when determinable up front
+    without fully parsing the file — always for classic pcap (the
+    global header's fixed ``network`` field); best-effort for pcapng
+    (see :func:`_pcapng_first_linktype`). ``None`` for anything else,
+    including a file that is not a recognized capture at all —
+    :func:`netprotocols.read_captures` is what actually validates the
+    format and raises accordingly."""
+    if len(data) >= _GLOBAL_HEADER.size and data[:4] in _PCAP_MAGICS:
+        endian = "<" if data[:4] in _PCAP_MAGICS_LE else ">"
+        return int(struct.unpack_from(f"{endian}I", data, 20)[0])
+    return _pcapng_first_linktype(data)
 
 
 class PcapWriter:
@@ -94,48 +161,29 @@ class PcapWriter:
         self.close()
 
 
-def read_pcap(path: str | Path) -> Iterator[tuple[bytes, int]]:
-    """Yield ``(frame, timestamp)`` pairs from a classic pcap file.
+def read_captures(path: str | Path) -> Iterator[tuple[bytes, int]]:
+    """Yield ``(frame, timestamp)`` pairs from a classic pcap or pcapng
+    file, auto-detected from its magic bytes.
 
     ``timestamp`` is always integer nanoseconds since the Unix epoch,
-    regardless of the file's on-disk precision: a microsecond-precision
-    file's fractional field is scaled by 1000, which is exact (no
-    precision is invented, none is lost). Accepts both byte orders;
-    rejects files whose linktype is not Ethernet (nothing else can be
-    fed to an Ethernet decoder) and files that end mid-record.
+    however the source file recorded it — see
+    :func:`netprotocols.read_captures` for exactly how each format's
+    on-disk precision is normalized. A pcapng Simple Packet Block, which
+    carries no timestamp, reports ``0`` (the library's own contract).
 
-    :raises ValueError: If the file is not classic pcap, carries a
-        non-Ethernet linktype, or is truncated.
+    :raises ValueError: the capture's declared link type is not
+        Ethernet, or the file is not a recognized pcap/pcapng capture,
+        or it is corrupt/truncated.
     """
     data = Path(path).read_bytes()
-    if len(data) < _GLOBAL_HEADER.size:
-        raise ValueError(f"{path}: too short to be a pcap file")
-    magic_le = struct.unpack_from("<I", data)[0]
-    magic_be = struct.unpack_from(">I", data)[0]
-    if magic_le in (_MAGIC_MICROSECONDS, _MAGIC_NANOSECONDS):
-        endian, magic = "<", magic_le
-    elif magic_be in (_MAGIC_MICROSECONDS, _MAGIC_NANOSECONDS):
-        endian, magic = ">", magic_be
-    else:
-        raise ValueError(f"{path}: not a classic pcap file")
-    frac_to_ns = 1 if magic == _MAGIC_NANOSECONDS else 1000
-    (network,) = struct.unpack_from(f"{endian}I", data, 20)
-    if network != _LINKTYPE_ETHERNET:
+    linktype = _declared_linktype(data)
+    if linktype is not None and linktype != _LINKTYPE_ETHERNET:
         raise ValueError(
-            f"{path}: linktype {network} is not Ethernet (1); this file "
+            f"{path}: linktype {linktype} is not Ethernet (1); this file "
             f"cannot be replayed through an Ethernet decoder"
         )
-    record = struct.Struct(f"{endian}IIII")
-    cursor = _GLOBAL_HEADER.size
-    while cursor < len(data):
-        if cursor + record.size > len(data):
-            raise ValueError(f"{path}: truncated record header")
-        ts_sec, ts_frac, incl_len, _ = record.unpack_from(data, cursor)
-        cursor += record.size
-        if cursor + incl_len > len(data):
-            raise ValueError(f"{path}: truncated frame data")
-        yield (
-            bytes(data[cursor : cursor + incl_len]),
-            ts_sec * 1_000_000_000 + ts_frac * frac_to_ns,
-        )
-        cursor += incl_len
+    try:
+        for captured in _read_captures(data):
+            yield captured.data, captured.timestamp
+    except MalformedCaptureError as error:
+        raise ValueError(f"{path}: {error}") from error
