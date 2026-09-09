@@ -117,8 +117,18 @@ async def _replay_source(
     timestamp)`` pairs into the async ``(bytes, timestamp, interface)``
     triples :func:`run` expects from every source, tagging every frame
     with the replayed file's path — a classic pcap file carries no
-    interface metadata of its own."""
+    interface metadata of its own.
+
+    The ``await asyncio.sleep(0)`` per frame is not a formality: a bare
+    ``for: yield`` loop with no real ``await`` inside never actually
+    hands control back to the event loop between items, so a task
+    cancelled from outside (SIGTERM, via ``_drive()``) would not be
+    able to interrupt it until the *entire* file finished replaying —
+    confirmed empirically, not assumed, since the failure mode is easy
+    to miss on the small fixtures this project's own tests replay.
+    """
     for data, timestamp in frames:
+        await asyncio.sleep(0)
         yield data, timestamp, interface
 
 

@@ -85,14 +85,16 @@ privileges. From a clone, run it as `sudo .venv/bin/python -m rootwire`.
 
 ## How it works
 
-`capture.py` yields raw frames from an `AF_PACKET` socket (or
-`pcap.py` replays them from a file — the two sources are
-interchangeable); `decoder.py` walks each frame's protocol chain into
-an immutable `DecodedFrame`; outputs — the screen renderer, the NDJSON
-stream, the pcap writer, the statistics collector — consume every
-frame through one small `Output` interface. The full tour, including
-why memory stays flat during long captures and how to add an output,
-is in [ARCHITECTURE.md](ARCHITECTURE.md).
+`capture.py`'s `capture_async()` yields raw frames — merged from one
+`AF_PACKET` socket per interface — as `(bytes, timestamp, interface)`
+triples; replaying from a file with `-r` adapts `pcap.py`'s frames
+into that same shape before either source reaches `decoder.py`, which
+walks each frame's protocol chain into an immutable `DecodedFrame`.
+Outputs — the screen renderer, the NDJSON stream, the pcap writer, the
+statistics collector — consume every frame through one small `Output`
+interface. The full tour, including why memory stays flat during long
+captures and how to add an output, is in
+[ARCHITECTURE.md](ARCHITECTURE.md).
 
 Everything except the raw socket runs on any OS, so the test suite —
 which includes a 65-frame corpus of real captured traffic replayed

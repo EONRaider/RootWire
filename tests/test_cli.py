@@ -6,6 +6,7 @@ import signal
 import socket as socket_module
 import struct
 import threading
+import time
 from typing import ClassVar
 
 import pytest
@@ -17,6 +18,20 @@ from rootwire.bpf import CANNED_FILTERS, SockFilter, _SockFprog
 from rootwire.cli import build_parser
 
 _INSTRUCTION = struct.Struct("=HBBI")
+
+
+def _wait_until(condition, timeout: float = 2.0) -> None:
+    """Poll ``condition`` (a zero-arg callable) until it's true, rather
+    than sleeping a fixed guess: a fixed delay is either a flaky race
+    under load or padded so generously it slows every run, and a wrong
+    guess in the wrong direction can send SIGTERM before its handler
+    is installed -- hitting Python's default disposition and killing
+    the whole test process, not just failing an assertion."""
+    deadline = time.monotonic() + timeout
+    while not condition():
+        if time.monotonic() > deadline:
+            raise AssertionError(f"condition not met within {timeout}s")
+        time.sleep(0.005)
 
 
 class TestCLI:
@@ -137,9 +152,10 @@ class TestFilterFlag:
         monkeypatch.setattr(capture_mod, "socket", factory)
 
         def push_error_once_ready() -> None:
+            _wait_until(lambda: len(created) >= 1)
             created[0].push_error(OSError("stop after setup"))
 
-        threading.Timer(0.05, push_error_once_ready).start()
+        threading.Thread(target=push_error_once_ready, daemon=True).start()
 
         with pytest.raises(OSError, match="stop after setup"):
             cli.main(["-i", "eth0", "--filter", "tcp"])
@@ -223,9 +239,19 @@ class TestAbortHandling:
         assert "frames/s" in err  # stats were reported: outputs flushed
 
     def _send_sigterm_shortly(self) -> None:
-        threading.Timer(
-            0.05, os.kill, args=(os.getpid(), signal.SIGTERM)
-        ).start()
+        """Send a real SIGTERM once _drive()'s handler is actually
+        installed, not after a fixed guess: sending it too early hits
+        Python's default disposition and kills the whole test process
+        outright, not just this test."""
+        original = signal.getsignal(signal.SIGTERM)
+
+        def wait_and_send() -> None:
+            _wait_until(
+                lambda: signal.getsignal(signal.SIGTERM) is not original
+            )
+            os.kill(os.getpid(), signal.SIGTERM)
+
+        threading.Thread(target=wait_and_send, daemon=True).start()
 
     def test_sigterm_flushes_and_reports_then_exits_cleanly(
         self, capsys, monkeypatch

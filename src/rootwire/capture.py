@@ -113,6 +113,15 @@ def _make_reader(
             data, ancdata, _flags, _addr = sock.recvmsg(
                 BUFFER_SIZE, _ANCILLARY_BUFSIZE
             )
+        except (BlockingIOError, InterruptedError):
+            # Transient, not a real failure: either a spurious wakeup
+            # (no data actually available) or the syscall was
+            # interrupted by a signal (EINTR) -- exactly what SIGTERM
+            # delivery itself can cause here, since this socket's fd is
+            # registered with the same event loop that just received
+            # it. The reader stays registered; epoll will re-signal
+            # readiness on its own if data is still waiting.
+            return
         except OSError as error:
             queue.put_nowait(error)
             return

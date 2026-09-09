@@ -274,6 +274,30 @@ class TestCaptureAsync:
                 (SOL_SOCKET, capture_mod.SO_LOCK_FILTER, 1),
             ]
 
+    def test_transient_blocking_or_interrupted_errors_are_swallowed(
+        self, monkeypatch
+    ):
+        """BlockingIOError (spurious wakeup) and InterruptedError
+        (EINTR -- exactly what SIGTERM delivery to this same process
+        can cause mid-recvmsg) are not real failures: the generator
+        must keep running afterward, not propagate them."""
+        created = _install_fake_sockets(monkeypatch)
+
+        async def body():
+            agen = capture_async(["eth0"])
+            task = asyncio.ensure_future(_collect(agen, 1))
+            await asyncio.sleep(0)
+            created[0].push_error(BlockingIOError())
+            created[0].push_error(InterruptedError())
+            created[0].push_frame(b"\xaa\xbb", [])
+            frame = (await task)[0]
+            await agen.aclose()
+            return frame
+
+        frame = asyncio.run(body())
+
+        assert frame[0] == b"\xaa\xbb"
+
     def test_socket_error_during_read_is_raised_from_the_generator(
         self, monkeypatch
     ):
