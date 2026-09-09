@@ -38,6 +38,16 @@ flowchart LR
   (cBPF) programs `--filter` selects from and the `SO_ATTACH_FILTER`
   plumbing `capture.py` calls into. Each canned program's bytecode is
   a golden fixture, checked byte-for-byte against `tcpdump -dd`.
+- **[`bpf_compiler.py`](src/rootwire/bpf_compiler.py)** compiles a
+  small, explicitly-bounded subset of tcpdump-style filter expressions
+  (`tcp and port 80`) to the same cBPF shape `bpf.py`'s canned programs
+  use — `--filter` tries a canned name first, falling back to this
+  compiler for anything else. Validated by *behavior*, not by matching
+  tcpdump's own instruction sequence (its decades-old peephole
+  optimizer makes that impractical past a single bare primitive):
+  `tests/bpf_vm.py` is a small cBPF interpreter that runs both this
+  compiler's output and real `tcpdump -dd` bytecode against the
+  project's captured-frame corpus and asserts they always agree.
 - **[`pcap.py`](src/rootwire/pcap.py)** reads and writes classic pcap,
   dependency-free. `read_pcap()` yields `(bytes, timestamp)` pairs;
   `cli.py`'s `_replay_source()` adapts that into the same
