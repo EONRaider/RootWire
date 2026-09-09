@@ -18,6 +18,7 @@ from collections.abc import AsyncIterator, Iterator, Sequence
 
 from rootwire import __version__
 from rootwire.bpf import CANNED_FILTERS, FilterProgram
+from rootwire.bpf_compiler import BPFCompileError, compile_expression
 from rootwire.decoder import decode_frame
 from rootwire.output import (
     Output,
@@ -68,11 +69,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--filter",
-        choices=sorted(CANNED_FILTERS),
+        metavar="NAME_OR_EXPR",
         default=None,
         help=(
             "attach a kernel-side capture filter so only matching frames "
-            "reach userspace; mutually exclusive with -r"
+            "reach userspace: a canned name "
+            f"({', '.join(sorted(CANNED_FILTERS))}) or a filter expression "
+            "(protocols tcp/udp/icmp/arp/ip/ip6; host/port, each "
+            "optionally prefixed with src/dst; and/or/not; parentheses -- "
+            "e.g. 'tcp and port 80'); mutually exclusive with -r"
         ),
     )
     parser.add_argument(
@@ -203,6 +208,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             "to overwrite the capture being replayed"
         )
 
+    filter_program: FilterProgram | None = None
+    if args.filter is not None:
+        instructions = CANNED_FILTERS.get(args.filter)
+        if instructions is None:
+            try:
+                instructions = compile_expression(args.filter)
+            except BPFCompileError as error:
+                # A bad --filter is a bad argument, not a runtime
+                # capture failure: reported and exits the same way
+                # argparse's own "invalid choice" errors do (usage
+                # message, exit 2), not folded into main()'s later
+                # PermissionError/ValueError capture-error handling.
+                build_parser().error(str(error))
+        filter_program = FilterProgram(instructions)
+
     stats = StatsCollector()
     outputs: list[Output] = [
         OutputToNDJSON()
@@ -233,11 +253,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         from rootwire.capture import capture_async  # Linux-only import
 
-        filter_program = (
-            FilterProgram(CANNED_FILTERS[args.filter])
-            if args.filter is not None
-            else None
-        )
         source = capture_async(args.interface, filter_program)
 
     print(

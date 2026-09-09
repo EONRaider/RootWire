@@ -51,7 +51,7 @@ uv sync
 
 ```
 rootwire [-h] [-i INTERFACE] [-r FILE] [-w FILE]
-         [--filter {arp,ip6,tcp,udp}] [--json] [-d] [--version]
+         [--filter NAME_OR_EXPR] [--json] [-d] [--version]
 
 options:
   -i, --interface   interface to capture frames from; repeat to capture on
@@ -59,8 +59,13 @@ options:
   -r, --read FILE   replay frames from a classic pcap file instead of live
                     capture (no privileges required)
   -w, --write FILE  also write every captured frame to a classic pcap file
-  --filter NAME     attach a kernel-side capture filter (arp, ip6, tcp, udp)
-                    so only matching frames reach userspace; live capture only
+  --filter NAME_OR_EXPR
+                    attach a kernel-side capture filter so only matching
+                    frames reach userspace: a canned name (tcp, udp, arp,
+                    ip6) or a filter expression -- protocols tcp/udp/icmp/
+                    arp/ip/ip6; host/port, each optionally prefixed with
+                    src/dst; and/or/not; parentheses (e.g. "tcp and port
+                    80"); live capture only
   --json            one NDJSON object per frame on stdout (banner and
                     statistics stay on stderr): pipe straight into jq
   -d, --data        also display each frame's raw payload (ignored with --json)
@@ -71,11 +76,12 @@ counts, per-protocol tallies — are reported on stderr when the capture
 ends. Some favorite combinations:
 
 ```
-sudo rootwire -i eth0 -w session.pcap        # capture and keep the evidence
-sudo rootwire -i eth0 --filter tcp           # drop non-TCP in the kernel
-sudo rootwire -i eth0 -i wlan0               # merge two interfaces into one stream
-rootwire -r session.pcap                     # inspect it later, no root
-rootwire -r session.pcap --json | jq .       # machine-readable analysis
+sudo rootwire -i eth0 -w session.pcap             # capture and keep the evidence
+sudo rootwire -i eth0 --filter tcp                # drop non-TCP in the kernel
+sudo rootwire -i eth0 --filter "tcp and port 80"  # kernel-side filter expression
+sudo rootwire -i eth0 -i wlan0                    # merge two interfaces into one stream
+rootwire -r session.pcap                          # inspect it later, no root
+rootwire -r session.pcap --json | jq .            # machine-readable analysis
 ```
 
 Live capture needs a raw socket, which on Linux means root
@@ -106,8 +112,6 @@ uv run pytest
 
 ## Roadmap
 
-- Compile tcpdump-style filter expressions (`tcp port 80`, `host 1.2.3.4`)
-  to BPF; a canned set (`--filter tcp/udp/arp/ip6`) already ships
 - Checksum verification rendering (the library already computes them)
 
 ## Contributing

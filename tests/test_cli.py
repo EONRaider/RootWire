@@ -15,6 +15,7 @@ import rootwire.capture as capture_mod
 from conftest import FIXTURES
 from rootwire import __version__, cli
 from rootwire.bpf import CANNED_FILTERS, SockFilter, _SockFprog
+from rootwire.bpf_compiler import compile_expression
 from rootwire.cli import build_parser
 
 _INSTRUCTION = struct.Struct("=HBBI")
@@ -125,22 +126,25 @@ class _FakeSocket:
 
 
 class TestFilterFlag:
-    def test_canned_filter_names_are_valid_choices(self):
-        for name in CANNED_FILTERS:
-            args = build_parser().parse_args(["--filter", name])
-            assert args.filter == name
-
-    def test_unknown_filter_name_is_rejected(self):
-        with pytest.raises(SystemExit) as excinfo:
-            build_parser().parse_args(["--filter", "not-a-real-filter"])
-        assert excinfo.value.code == 2
+    def test_filter_value_is_stored_verbatim_at_parse_time(self):
+        """--filter no longer restricts values via argparse `choices` —
+        a canned name and an arbitrary expression look identical to the
+        parser; main() is what tells them apart and validates either
+        one (see the tests below)."""
+        args = build_parser().parse_args(["--filter", "tcp and port 80"])
+        assert args.filter == "tcp and port 80"
 
     def test_read_and_filter_are_exclusive(self):
         with pytest.raises(SystemExit) as excinfo:
             cli.main(["-r", "x.pcap", "--filter", "tcp"])
         assert excinfo.value.code == 2
 
-    def test_filter_is_attached_to_the_capture_socket(self, monkeypatch):
+    def _attach_and_capture(
+        self, filter_value: str, monkeypatch
+    ) -> list[tuple]:
+        """Drive cli.main() far enough to observe what got attached to
+        the capture socket, then abort it via the #57 seam (a canned
+        OSError) rather than letting it block forever."""
         _FakeSocket.attached_programs = []
         created: list[_FakeSocket] = []
 
@@ -158,9 +162,38 @@ class TestFilterFlag:
         threading.Thread(target=push_error_once_ready, daemon=True).start()
 
         with pytest.raises(OSError, match="stop after setup"):
-            cli.main(["-i", "eth0", "--filter", "tcp"])
+            cli.main(["-i", "eth0", "--filter", filter_value])
 
-        assert _FakeSocket.attached_programs == [CANNED_FILTERS["tcp"]]
+        return _FakeSocket.attached_programs
+
+    def test_canned_filter_name_is_attached_to_the_capture_socket(
+        self, monkeypatch
+    ):
+        assert self._attach_and_capture("tcp", monkeypatch) == [
+            CANNED_FILTERS["tcp"]
+        ]
+
+    def test_expression_is_compiled_and_attached_to_the_capture_socket(
+        self, monkeypatch
+    ):
+        expected = compile_expression("tcp and port 80")
+        assert self._attach_and_capture("tcp and port 80", monkeypatch) == [
+            expected
+        ]
+
+    def test_invalid_expression_is_rejected_before_any_socket_opens(
+        self, monkeypatch
+    ):
+        opened = []
+        monkeypatch.setattr(
+            capture_mod, "socket", lambda *a: opened.append(a) or None
+        )
+
+        with pytest.raises(SystemExit) as excinfo:
+            cli.main(["-i", "eth0", "--filter", "sctp"])
+
+        assert excinfo.value.code == 2
+        assert opened == []  # rejected during argument validation, not setup
 
 
 class TestSameFileGuard:

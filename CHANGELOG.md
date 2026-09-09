@@ -35,15 +35,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not for any CLI usage (#61).
 
 ### Added
+- **`--filter` now also accepts arbitrary filter expressions**
+  (`tcp and port 80`, `host 1.2.3.4`, `not arp`, ...), compiled to cBPF
+  by a small hand-rolled compiler — no libpcap dependency, keeping
+  RootWire's zero-dependency, from-scratch posture. Supported grammar:
+  protocols `tcp`/`udp`/`icmp`/`arp`/`ip`/`ip6`; `host`/`port`, each
+  optionally prefixed with `src`/`dst`; `and`/`or`/`not`; parentheses
+  — anything outside that grammar is a clear compile-time error, never
+  a best-effort guess. Correctness is validated by interpreting both
+  this compiler's output and real `tcpdump -dd` bytecode against the
+  project's captured-frame corpus and asserting they always agree on
+  accept/reject for every frame — not by matching tcpdump's exact
+  instruction sequence, which its own decades-old peephole optimizer
+  makes impractical to reproduce by hand past a single bare primitive
+  (#63).
 - **`--filter {tcp,udp,arp,ip6}`**: attach a kernel-side classic-BPF
   (cBPF) filter to the capture socket (`SO_ATTACH_FILTER`), the same
   mechanism `tcpdump` itself uses, so non-matching frames are dropped
   in the kernel and never copied to userspace. This release ships a
   small, canned set of pre-compiled programs, each verified
-  byte-for-byte against `tcpdump -dd <expression>`; compiling
-  arbitrary filter expressions (`tcp port 80`, `host 1.2.3.4`) is
-  future work. Mutually exclusive with `-r` — replay has no socket to
-  attach a kernel filter to (#62).
+  byte-for-byte against `tcpdump -dd <expression>`. Mutually exclusive
+  with `-r` — replay has no socket to attach a kernel filter to (#62).
 - Diagnose IPv4 frames whose `total_length` is smaller than the header
   itself — a length field that cannot be correct. The frame is flagged
   `[!] Malformed` on screen, carries a `malformed_length` field in NDJSON
