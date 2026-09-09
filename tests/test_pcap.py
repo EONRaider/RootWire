@@ -67,6 +67,27 @@ def _build_pcapng(
     return shb + idb + epbs
 
 
+def _build_pcapng_multi_interface(
+    frame: bytes, *, interface_id: int, linktypes: list[int]
+) -> bytes:
+    """A pcapng capture with one Interface Description Block per entry
+    in *linktypes* (interface ids 0, 1, ...) and one Enhanced Packet
+    Block for *frame* referencing *interface_id* -- for exercising the
+    "a later interface is non-Ethernet" case a first-IDB-only linktype
+    check would miss."""
+    shb = _pcapng_block(0x0A0D0D0A, struct.pack("<IHHq", 0x1A2B3C4D, 1, 0, -1))
+    idbs = b"".join(
+        _pcapng_block(1, struct.pack("<HHI", linktype, 0, 65_535))
+        for linktype in linktypes
+    )
+    epb = _pcapng_block(
+        6,
+        struct.pack("<IIIII", interface_id, 0, 0, len(frame), len(frame))
+        + frame,
+    )
+    return shb + idbs + epb
+
+
 def _build_pcapng_simple_packet(data: bytes, *, linktype: int = 1) -> bytes:
     """A minimal pcapng capture carrying one Simple Packet Block, which
     (unlike an Enhanced Packet Block) has no timestamp field at all."""
@@ -196,6 +217,21 @@ class TestPcapngReader:
         path = tmp_path / "raw-ip.pcapng"
         path.write_bytes(
             _build_pcapng([(FRAMES[0], TIMESTAMPS[0])], linktype=101)
+        )
+        with pytest.raises(ValueError, match="linktype 101"):
+            list(read_captures(path))
+
+    def test_pcapng_non_ethernet_second_interface_rejected(self, tmp_path):
+        """A first-IDB-only linktype check would miss this: interface 0
+        is Ethernet, interface 1 is not, and the only frame present
+        references interface 1 -- the whole capture must still be
+        refused, not just frames that happen to reference interface 0
+        (a review finding on the original single-IDB implementation)."""
+        path = tmp_path / "second-iface-non-ethernet.pcapng"
+        path.write_bytes(
+            _build_pcapng_multi_interface(
+                FRAMES[0], interface_id=1, linktypes=[1, 101]
+            )
         )
         with pytest.raises(ValueError, match="linktype 101"):
             list(read_captures(path))

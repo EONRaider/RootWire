@@ -59,9 +59,10 @@ flowchart LR
   `-r FILE` is a drop-in frame source and the whole pipeline runs
   against a file, no privileges needed. Before decoding, the capture's
   declared link type is checked against Ethernet where it can be
-  determined up front (always for classic pcap; the first Interface
-  Description Block for pcapng), since nothing else stops a wrong link
-  type from silently decoding into nonsense.
+  determined up front (always for classic pcap; every Interface
+  Description Block for pcapng, since an Enhanced Packet Block can
+  reference any of them), since nothing else stops a wrong link type
+  from silently decoding into nonsense.
 - **[`decoder.py`](src/rootwire/decoder.py)** turns one frame's bytes
   into a `DecodedFrame` — a pure function with no state between calls.
 - **[`frame.py`](src/rootwire/frame.py)** defines `DecodedFrame`:

@@ -19,9 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Replay's non-Ethernet-linktype rejection (previously classic-pcap
-  only) now also covers pcapng, checked against the first Interface
-  Description Block's declared link type before any frame is decoded
-  — nothing else stops a wrong link type from silently decoding into
+  only) now also covers pcapng, checked against *every* declared
+  Interface Description Block before any frame is decoded — an
+  Enhanced Packet Block can reference any interface a preceding IDB
+  declared, not just the first one, so checking only the first would
+  miss a crafted file mixing an Ethernet IDB with a non-Ethernet one.
+  Nothing else stops a wrong link type from silently decoding into
   nonsense, since `Ethernet` accepts any 14+ bytes structurally (#77).
 
 ## [6.0.0] - 2026-09-09

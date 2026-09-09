@@ -17,8 +17,9 @@ nanoseconds (including foreign/older microsecond-precision classic
 captures, and pcapng's per-interface timestamp resolution) happens
 there. Before decoding, this module checks the capture's declared link
 type against Ethernet where it can be determined up front (always for
-classic pcap; the first Interface Description Block for pcapng) and
-rejects anything else: :class:`~netprotocols.Ethernet` accepts any
+classic pcap; every Interface Description Block for pcapng, since an
+Enhanced Packet Block can reference any of them, not just the first)
+and rejects anything else: :class:`~netprotocols.Ethernet` accepts any
 14+ bytes structurally, so nothing else stops a wrong link type from
 silently decoding into nonsense. Reading otherwise deliberately has the
 same shape as :func:`rootwire.capture.capture_async` — so replaying a
@@ -72,44 +73,71 @@ _SHB_BOM = 0x1A2B3C4D
 _IDB_TYPE = 1
 
 
-def _pcapng_first_linktype(data: bytes) -> int | None:
-    """The ``LinkType`` field of the first Interface Description Block
-    in a pcapng buffer, or ``None`` if none is found before the buffer
-    ends (an interface-free capture, or a truncated one — either way,
-    not this function's job to diagnose; :func:`read_captures` does).
+def _pcapng_linktype(data: bytes) -> int | None:
+    """The declared link type across *every* Interface Description
+    Block in a pcapng buffer: :data:`_LINKTYPE_ETHERNET` only if every
+    IDB found declares it, otherwise the first non-Ethernet link type
+    found. ``None`` if the buffer holds no IDB at all (nothing to
+    determine; a truncated or interface-free capture — either way, not
+    this function's job to diagnose; :func:`read_captures` does).
 
-    Only the first section is examined: enough for the up-front
-    linktype gate this exists for, and a capture legitimately mixing
-    link types across sections is not a case a single-shot replay tool
-    needs to get right.
+    Checking only the *first* IDB is not enough: an Enhanced Packet
+    Block can reference any interface a preceding IDB declared, not
+    just the first one, so a crafted file with an Ethernet IDB
+    followed by a non-Ethernet one could pass a first-IDB-only check
+    while still feeding non-Ethernet bytes to the decoder. Rejecting
+    the whole capture if *any* declared interface is non-Ethernet is
+    conservative — a real capture legitimately mixing link types
+    across interfaces would be refused even if only its Ethernet
+    interface were ever referenced — but that's the safer failure mode
+    than the alternative: this module has no way to check, for a given
+    frame, which interface it actually came from without duplicating
+    substantially more of the block walk :func:`netprotocols.
+    read_captures` already does correctly.
+
+    Each Section Header Block resets byte order for the blocks after
+    it, exactly as :mod:`netprotocols`'s own reader treats a section
+    boundary, so multiple concatenated sections (each potentially a
+    different byte order) are still read correctly.
     """
     if len(data) < 12 or data[:4] != _SHB_TYPE:
         return None
-    endian = "<" if data[8:12] == struct.pack("<I", _SHB_BOM) else ">"
+    endian: str = "<"
+    found: int | None = None
     cursor = 0
     while cursor + 8 <= len(data):
+        if data[cursor : cursor + 4] == _SHB_TYPE:
+            if cursor + 12 > len(data):
+                break
+            endian = (
+                "<"
+                if data[cursor + 8 : cursor + 12] == struct.pack("<I", _SHB_BOM)
+                else ">"
+            )
         block_type, block_len = struct.unpack_from(f"{endian}II", data, cursor)
         if block_len < 12 or cursor + block_len > len(data):
-            return None
+            break
         if block_type == _IDB_TYPE and block_len >= 16:
             (link_type,) = struct.unpack_from(f"{endian}H", data, cursor + 8)
-            return int(link_type)
+            if link_type != _LINKTYPE_ETHERNET:
+                return int(link_type)
+            found = _LINKTYPE_ETHERNET
         cursor += block_len
-    return None
+    return found
 
 
 def _declared_linktype(data: bytes) -> int | None:
     """The capture's declared link type, when determinable up front
     without fully parsing the file — always for classic pcap (the
-    global header's fixed ``network`` field); best-effort for pcapng
-    (see :func:`_pcapng_first_linktype`). ``None`` for anything else,
-    including a file that is not a recognized capture at all —
-    :func:`netprotocols.read_captures` is what actually validates the
-    format and raises accordingly."""
+    global header's fixed ``network`` field); every Interface
+    Description Block for pcapng (see :func:`_pcapng_linktype`).
+    ``None`` for anything else, including a file that is not a
+    recognized capture at all — :func:`netprotocols.read_captures` is
+    what actually validates the format and raises accordingly."""
     if len(data) >= _GLOBAL_HEADER.size and data[:4] in _PCAP_MAGICS:
         endian = "<" if data[:4] in _PCAP_MAGICS_LE else ">"
         return int(struct.unpack_from(f"{endian}I", data, 20)[0])
-    return _pcapng_first_linktype(data)
+    return _pcapng_linktype(data)
 
 
 class PcapWriter:
