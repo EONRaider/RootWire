@@ -121,7 +121,7 @@ class TestJSONModePurity:
         assert "frames/s" in captured.err  # stats on stderr
 
     def test_json_composes_with_write(self, tmp_path, capsys):
-        from rootwire.pcap import read_pcap as replay
+        from rootwire.pcap import read_captures as replay
 
         source = FIXTURES / "arp_exchange.pcap"
         copy = tmp_path / "copy.pcap"

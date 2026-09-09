@@ -21,9 +21,14 @@ from typing import IO, Any, cast
 
 from netprotocols import (
     ARP,
+    DHCP,
+    DNS,
+    GRE,
+    IGMP,
     TCP,
     UDP,
     VLAN,
+    DNSOverTCP,
     Ethernet,
     ICMPv4,
     ICMPv6,
@@ -37,6 +42,8 @@ from netprotocols import (
     IPv6Routing,
     Protocol,
     TCPOption,
+    compute,
+    verify,
 )
 
 from rootwire.frame import DecodedFrame
@@ -97,6 +104,58 @@ def _format_option(option: IPv4Option | TCPOption) -> str:
         # already stringify with their own parens -- no extra wrapping.
         return f"{option.kind_name} {value}"
     return f"{option.kind_name} ({value})"
+
+
+def _trailing_bytes(frame: DecodedFrame, layer: Protocol) -> bytes:
+    """The bytes that followed *layer* on the wire, whether or not
+    anything after it was itself decoded into a further layer —
+    reconstructed from the frame's own raw capture rather than
+    re-serializing subsequent layers, so it is exact regardless of
+    chain depth. Equal to ``frame.payload`` when *layer* is the last
+    decoded layer."""
+    cursor = 0
+    for candidate in frame.layers:
+        cursor += candidate.header_len
+        if candidate is layer:
+            return frame.raw[cursor:]
+    return frame.payload  # pragma: no cover -- layer is always in frame.layers
+
+
+def _is_fragmented(frame: DecodedFrame) -> bool:
+    """Whether this frame is a non-reassembled IP fragment.
+
+    A transport-layer checksum (ICMP/TCP/UDP) covers the *reassembled*
+    datagram; RootWire never reassembles fragments (each renders
+    independently, labeled "first fragment" / "fragment at offset N").
+    Verifying one against a single fragment's bytes would disagree with
+    the wire checksum every time — correctly, but for a reason that has
+    nothing to do with the checksum being wrong, so callers use this to
+    suppress that check rather than flag a false mismatch.
+    """
+    ipv4 = frame.layer(IPv4)
+    if ipv4 is not None and (ipv4.flags & 0b001 or ipv4.fragment_offset > 0):
+        return True
+    return any(isinstance(layer, IPv6Fragment) for layer in frame.layers)
+
+
+def _checksum_note(
+    layer: Protocol, *, ip: IPv4 | IPv6 | None = None, payload: bytes = b""
+) -> str:
+    """A trailing ``" [!] mismatch (expected 0xXXXX)"`` note for a
+    checksum display line, or ``""`` when it verifies.
+
+    Never raises: a checksum this helper cannot compute (most notably,
+    a required enclosing IP layer this frame doesn't have) is treated
+    as unverifiable, not as a mismatch — rendering must never flag a
+    false positive over its own inability to check.
+    """
+    try:
+        if verify(layer, ip=ip, payload=payload):
+            return ""
+        expected = compute(layer, ip=ip, payload=payload)
+    except InvalidFieldError:
+        return ""
+    return f" [!] mismatch (expected {expected:#06x})"
 
 
 class Output(ABC):
@@ -192,7 +251,7 @@ class OutputToScreen(Output):
         )
         self._print(
             f"{_II}Protocol: {layer.protocol_name} | "
-            f"Checksum: {layer.checksum_hex_str}"
+            f"Checksum: {layer.checksum_hex_str}{_checksum_note(layer)}"
         )
         self._render_options_line(layer)
 
@@ -268,6 +327,42 @@ class OutputToScreen(Output):
         )
 
     @_render.register
+    def _(self, layer: GRE, frame: DecodedFrame) -> None:
+        self._print(f"{_I}[+] GRE (protocol: {layer.protocol_name})")
+        optional = []
+        if layer.checksum_present:
+            optional.append(f"Checksum: {layer.checksum_hex_str}")
+        if layer.key_present:
+            optional.append(f"Key: {layer.key:#010x}")
+        if layer.sequence_present:
+            optional.append(f"Sequence: {layer.sequence_number}")
+        self._print(
+            f"{_II}{' | '.join(optional) if optional else 'No optional fields'}"
+        )
+
+    @_render.register
+    def _(self, layer: IGMP, frame: DecodedFrame) -> None:
+        self._print(f"{_I}[+] IGMP {layer.type_name}")
+        self._print(
+            f"{_II}Max Resp Code: {layer.max_resp_code} | "
+            f"Checksum: {layer.checksum_hex_str}"
+        )
+        try:
+            group_address = layer.group_address
+            records = layer.group_records
+        except InvalidFieldError as error:
+            self._print(f"{_II}[!] Body malformed: {error}")
+            return
+        if group_address is not None:
+            self._print(f"{_II}Group: {group_address}")
+        for record in records or ():
+            sources = ", ".join(record.source_addresses) or "none"
+            self._print(
+                f"{_II}Record: {record.record_type_name} "
+                f"{record.multicast_address} (sources: {sources})"
+            )
+
+    @_render.register
     def _(self, layer: ICMPv4, frame: DecodedFrame) -> None:
         self._render_icmp(layer, frame, version=4)
 
@@ -282,9 +377,18 @@ class OutputToScreen(Output):
         ip = frame.layer(IPv4) if version == 4 else frame.layer(IPv6)
         route = f" {ip.src} -> {ip.dst}" if ip is not None else ""
         self._print(f"{_I}[+] ICMPv{version}{route}")
+        # No pseudo-header for ICMPv4 (compute() ignores ip there); the
+        # ICMPv6 pseudo-header needs the enclosing IPv6 layer. Skipped
+        # entirely for a fragment: the checksum covers the reassembled
+        # message, which this single fragment's bytes never match.
+        note = (
+            ""
+            if _is_fragmented(frame)
+            else _checksum_note(layer, ip=ip if version == 6 else None)
+        )
         self._print(
             f"{_II}Type: {layer.type} ({layer.type_name}) | "
-            f"Code: {layer.code} | Checksum: {layer.checksum_hex_str}"
+            f"Code: {layer.code} | Checksum: {layer.checksum_hex_str}{note}"
         )
         if isinstance(layer, ICMPv6):
             self._render_ndp(layer)
@@ -318,17 +422,92 @@ class OutputToScreen(Output):
             f"{_II}Flags: {layer.flags_hex_str} ({layer.flags_str}) | "
             f"Seq: {layer.seq} | Ack: {layer.ack}"
         )
+        ip = frame.layer(IPv4) or frame.layer(IPv6)
+        note = (
+            ""
+            if _is_fragmented(frame)
+            else _checksum_note(
+                layer, ip=ip, payload=_trailing_bytes(frame, layer)
+            )
+        )
         self._print(
-            f"{_II}Window: {layer.window} | Checksum: {layer.checksum_hex_str}"
+            f"{_II}Window: {layer.window} | "
+            f"Checksum: {layer.checksum_hex_str}{note}"
         )
         self._render_options_line(layer)
 
     @_render.register
     def _(self, layer: UDP, frame: DecodedFrame) -> None:
         self._print(f"{_I}[+] UDP {layer.src_port} -> {layer.dst_port}")
-        self._print(
-            f"{_II}Length: {layer.length} | Checksum: {layer.checksum_hex_str}"
+        ip = frame.layer(IPv4) or frame.layer(IPv6)
+        note = (
+            ""
+            if _is_fragmented(frame)
+            else _checksum_note(
+                layer, ip=ip, payload=_trailing_bytes(frame, layer)
+            )
         )
+        self._print(
+            f"{_II}Length: {layer.length} | "
+            f"Checksum: {layer.checksum_hex_str}{note}"
+        )
+
+    @_render.register
+    def _(self, layer: DNS, frame: DecodedFrame) -> None:
+        direction = "response" if layer.qr else "query"
+        self._print(f"{_I}[+] DNS {direction} (id {layer.transaction_id:#06x})")
+        self._print(
+            f"{_II}Flags: {layer.flags_hex_str} | Opcode: {layer.opcode} | "
+            f"RCODE: {layer.rcode}"
+        )
+        try:
+            questions = layer.questions
+            answers = layer.answers
+        except InvalidFieldError as error:
+            self._print(f"{_II}[!] Records malformed: {error}")
+            return
+        for question in questions:
+            name = _sanitize_for_terminal(question.name)
+            self._print(f"{_II}Q: {name} (type {question.qtype})")
+        for answer in answers:
+            name = _sanitize_for_terminal(answer.name)
+            rdata = _sanitize_for_terminal(answer.rdata_text)
+            self._print(
+                f"{_II}A: {name} {answer.rtype_name} {answer.ttl}s -> {rdata}"
+            )
+
+    @_render.register
+    def _(self, layer: DNSOverTCP, frame: DecodedFrame) -> None:
+        self._print(
+            f"{_I}[+] DNS over TCP "
+            f"(message length: {layer.message_length} bytes)"
+        )
+
+    @_render.register
+    def _(self, layer: DHCP, frame: DecodedFrame) -> None:
+        try:
+            message_type = layer.message_type_name
+        except InvalidFieldError:
+            # message_type_name and parsed_options both read the same
+            # underlying option_map, so a malformed options section
+            # raises identically from either -- falling back silently
+            # here is safe: the [!] diagnostic below still fires.
+            message_type = None
+        self._print(f"{_I}[+] DHCP {message_type or layer.op_name}")
+        self._print(
+            f"{_II}Client: {layer.client_mac or 'n/a'} | XID: {layer.xid:#010x}"
+        )
+        self._print(
+            f"{_II}Client Addr: {layer.ciaddr} | Your Addr: {layer.yiaddr} | "
+            f"Server Addr: {layer.siaddr} | Gateway Addr: {layer.giaddr}"
+        )
+        try:
+            option_count = len(layer.parsed_options)
+        except InvalidFieldError as error:
+            self._print(f"{_II}[!] Options malformed: {error}")
+        else:
+            if option_count:
+                self._print(f"{_II}Options: {option_count} parsed")
 
     @_render.register
     def _(self, layer: VLAN, frame: DecodedFrame) -> None:

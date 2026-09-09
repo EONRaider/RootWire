@@ -34,10 +34,15 @@ tagging), ARP, IPv4 (**decoded options** and fragments), IPv6
 Hop-by-Hop chain) and **Neighbor Discovery** (a Router/Neighbor
 Solicitation or Advertisement shows its target address and link-layer
 options), ICMPv4/v6, TCP (options-aware payload offsets, **decoded
-options**) and UDP. Malformed or truncated frames are diagnosed
-instead of crashing the capture, unknown protocols end the chain
-gracefully, and a 16-layer cap keeps crafted extension-header stacks
-from amplifying — the capture survives whatever the network delivers.
+options**) and UDP. Every IPv4/ICMPv4/ICMPv6/TCP/UDP checksum is
+verified against a recomputation, flagging a mismatch inline
+(`Checksum: 0x0000 [!] mismatch (expected 0x1a2b)`) — a real signal
+for corrupted or spoofed traffic, silent for a non-reassembled
+fragment, where the wire checksum covers a datagram RootWire never
+rebuilds. Malformed or truncated frames are diagnosed instead of
+crashing the capture, unknown protocols end the chain gracefully, and
+a 16-layer cap keeps crafted extension-header stacks from amplifying —
+the capture survives whatever the network delivers.
 
 ## Installation
 
@@ -62,7 +67,7 @@ rootwire [-h] [-i INTERFACE] [-r FILE] [-w FILE]
 options:
   -i, --interface   interface to capture frames from; repeat to capture on
                     several interfaces concurrently (default: all interfaces)
-  -r, --read FILE   replay frames from a classic pcap file instead of live
+  -r, --read FILE   replay frames from a pcap or pcapng file instead of live
                     capture (no privileges required; mutually exclusive
                     with -i)
   -w, --write FILE  also write every captured frame to a classic pcap file
@@ -119,10 +124,6 @@ through the whole pipeline — needs neither root nor Linux:
 ```
 uv run pytest
 ```
-
-## Roadmap
-
-- Checksum verification rendering (the library already computes them)
 
 ## Contributing
 
