@@ -10,6 +10,13 @@ on:
   # so without this a release ran no checks at all.
   workflow_call:
 
+# No job here needs to write anything -- lint/typecheck/test all read
+# the checked-out tree and call out to local tools. Explicit so a
+# release.yml-triggered run of this workflow doesn't inherit broader
+# token permissions than it needs.
+permissions:
+  contents: read
+
 jobs:
   lint:
     runs-on: ubuntu-latest
