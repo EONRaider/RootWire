@@ -5,6 +5,10 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+  # Callable so release.yml can run this exact ladder against a tagged
+  # commit before publishing: a tag push matches neither trigger above,
+  # so without this a release ran no checks at all.
+  workflow_call:
 
 jobs:
   lint:
