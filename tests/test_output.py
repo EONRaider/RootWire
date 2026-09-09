@@ -96,6 +96,21 @@ class TestOutputToScreen:
         assert "Malformed: IPv4 total_length (4)" in text
         assert "smaller than its header (20 bytes)" in text
 
+    def test_gre_rendering(self, gre_frame):
+        text = render(gre_frame)
+        assert "GRE (protocol: IPv4)" in text
+        assert "Key: 0x0000002a" in text
+
+    def test_igmp_v2_report_rendering(self, igmp_report_frame):
+        text = render(igmp_report_frame)
+        assert "IGMP IGMPv2 Membership Report" in text
+        assert "Group: 224.0.0.251" in text
+
+    def test_igmpv3_report_rendering(self, igmpv3_report_frame):
+        text = render(igmpv3_report_frame)
+        assert "IGMP IGMPv3 Membership Report" in text
+        assert "Record: MODE_IS_EXCLUDE 224.0.0.1" in text
+
 
 class TestExtensionHeaderRendering:
     def test_mld_frame_renders_hop_by_hop(self, request):

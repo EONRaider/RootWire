@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Screen renderers for GRE and IGMP.** Both already decoded correctly
+  (chain dispatch is registry-driven, not a RootWire whitelist) but
+  printed as the generic `"(no renderer)"` placeholder on screen. GRE
+  now shows the encapsulated EtherType and which optional
+  checksum/key/sequence fields are present; IGMP shows the message
+  type, and either the multicast group (query/v1/v2 report/leave) or
+  every group record (a v3 report), each with its record type and
+  source-address list. IGMP's body-parsing accessors surface a `[!]`
+  diagnostic instead of raising if malformed, matching the DNS/DHCP
+  renderers' contract for the same reason: parsed on demand, not
+  validated at decode time (#76).
+
 ## [6.0.0] - 2026-09-09
 
 RootWire's own dependency, [NETProtocols](https://github.com/EONRaider/NETProtocols),

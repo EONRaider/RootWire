@@ -21,12 +21,15 @@ from typing import IO, Any, cast
 
 from netprotocols import (
     ARP,
+    GRE,
+    IGMP,
     TCP,
     UDP,
     VLAN,
     Ethernet,
     ICMPv4,
     ICMPv6,
+    InvalidFieldError,
     IPv4,
     IPv6,
     IPv6DestinationOptions,
@@ -231,6 +234,42 @@ class OutputToScreen(Output):
             f"More Fragments: {'yes' if layer.m_flag else 'no'} | "
             f"Next Header: {layer.next_header_name}"
         )
+
+    @_render.register
+    def _(self, layer: GRE, frame: DecodedFrame) -> None:
+        self._print(f"{_I}[+] GRE (protocol: {layer.protocol_name})")
+        optional = []
+        if layer.checksum_present:
+            optional.append(f"Checksum: {layer.checksum_hex_str}")
+        if layer.key_present:
+            optional.append(f"Key: {layer.key:#010x}")
+        if layer.sequence_present:
+            optional.append(f"Sequence: {layer.sequence_number}")
+        self._print(
+            f"{_II}{' | '.join(optional) if optional else 'No optional fields'}"
+        )
+
+    @_render.register
+    def _(self, layer: IGMP, frame: DecodedFrame) -> None:
+        self._print(f"{_I}[+] IGMP {layer.type_name}")
+        self._print(
+            f"{_II}Max Resp Code: {layer.max_resp_code} | "
+            f"Checksum: {layer.checksum_hex_str}"
+        )
+        try:
+            group_address = layer.group_address
+            records = layer.group_records
+        except InvalidFieldError as error:
+            self._print(f"{_II}[!] Body malformed: {error}")
+            return
+        if group_address is not None:
+            self._print(f"{_II}Group: {group_address}")
+        for record in records or ():
+            sources = ", ".join(record.source_addresses) or "none"
+            self._print(
+                f"{_II}Record: {record.record_type_name} "
+                f"{record.multicast_address} (sources: {sources})"
+            )
 
     @_render.register
     def _(self, layer: ICMPv4, frame: DecodedFrame) -> None:

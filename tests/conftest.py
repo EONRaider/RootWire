@@ -10,6 +10,8 @@ from pathlib import Path
 import pytest
 from netprotocols import (
     ARP,
+    GRE,
+    IGMP,
     TCP,
     UDP,
     Ethernet,
@@ -129,6 +131,50 @@ def icmpv6_frame() -> bytes:
         dst="ff02::1",
     )
     return bytes(Packet(_eth(0x86DD), ip, icmp))
+
+
+@pytest.fixture
+def gre_frame() -> bytes:
+    """A GRE tunnel (checksum + key present) encapsulating a bare inner
+    IPv4 header. No real capture carries GRE (see fixtures/MANIFEST.md),
+    so this is hand-built the same way the other synthetic fixtures
+    above are."""
+    inner = _ipv4(protocol=1, total_length=20)
+    gre = GRE(
+        flags=0x8000 | 0x2000,  # checksum + key present
+        protocol_type=0x0800,
+        fields=b"\x00\x00\x00\x00" + b"\x00\x00\x00\x2a",
+    )
+    outer = _ipv4(protocol=47, total_length=20 + gre.header_len + 20)
+    return bytes(Packet(_eth(0x0800), outer, gre)) + bytes(inner)
+
+
+@pytest.fixture
+def igmp_report_frame() -> bytes:
+    """An IGMPv2 Membership Report for the mDNS group 224.0.0.251. No
+    real capture carries IGMP; hand-built like the other synthetic
+    fixtures above."""
+    igmp = IGMP(
+        type=0x16, max_resp_code=0, checksum=0, body=b"\xe0\x00\x00\xfb"
+    )
+    ip = _ipv4(protocol=2, total_length=20 + igmp.header_len)
+    return bytes(Packet(_eth(0x0800), ip, igmp))
+
+
+@pytest.fixture
+def igmpv3_report_frame() -> bytes:
+    """An IGMPv3 Membership Report with one MODE_IS_EXCLUDE group
+    record for 224.0.0.1. No real capture carries IGMP; hand-built like
+    the other synthetic fixtures above."""
+    record = (
+        bytes([2, 0])  # record_type=MODE_IS_EXCLUDE, aux_data_len=0 words
+        + b"\x00\x00"  # num_sources = 0
+        + b"\xe0\x00\x00\x01"  # multicast address 224.0.0.1
+    )
+    body = b"\x00\x00\x00\x01" + record  # reserved + num_records=1
+    igmp = IGMP(type=0x22, max_resp_code=0, checksum=0, body=body)
+    ip = _ipv4(protocol=2, total_length=20 + igmp.header_len)
+    return bytes(Packet(_eth(0x0800), ip, igmp))
 
 
 @pytest.fixture
