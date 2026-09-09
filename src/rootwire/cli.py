@@ -186,12 +186,18 @@ async def _drive(
         loop.remove_signal_handler(signal.SIGTERM)
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+def _validate_args(
+    args: argparse.Namespace, parser: argparse.ArgumentParser
+) -> None:
+    """Argument combinations argparse's own mutual-exclusion groups
+    can't express (they depend on values, not just presence). Each
+    check reports the same way an argparse-native error would --
+    usage message, exit 2, via ``parser.error()``, which never
+    returns."""
     if args.read is not None and args.interface is not None:
-        build_parser().error("-r/--read and -i/--interface are exclusive")
+        parser.error("-r/--read and -i/--interface are exclusive")
     if args.read is not None and args.filter is not None:
-        build_parser().error(
+        parser.error(
             "-r/--read and --filter are exclusive: replay has no socket "
             "to attach a kernel filter to"
         )
@@ -203,27 +209,38 @@ def main(argv: Sequence[str] | None = None) -> int:
         # The writer truncates its target on open, before the lazy
         # replay reader has read a byte, so this would silently destroy
         # the very capture being replayed. Refuse before anything opens.
-        build_parser().error(
+        parser.error(
             "-w/--write and -r/--read refer to the same file; refusing "
             "to overwrite the capture being replayed"
         )
 
-    filter_program: FilterProgram | None = None
-    if args.filter is not None:
-        instructions = CANNED_FILTERS.get(args.filter)
-        if instructions is None:
-            try:
-                instructions = compile_expression(args.filter)
-            except BPFCompileError as error:
-                # A bad --filter is a bad argument, not a runtime
-                # capture failure: reported and exits the same way
-                # argparse's own "invalid choice" errors do (usage
-                # message, exit 2), not folded into main()'s later
-                # PermissionError/ValueError capture-error handling.
-                build_parser().error(str(error))
-        filter_program = FilterProgram(instructions)
 
-    stats = StatsCollector()
+def _resolve_filter_program(
+    args: argparse.Namespace, parser: argparse.ArgumentParser
+) -> FilterProgram | None:
+    """``--filter`` is either a canned name (``bpf.py``) or an
+    expression (``bpf_compiler.py``); either way this is argument
+    validation, not a runtime capture failure, so a bad one is
+    reported and exits the same way argparse's own "invalid choice"
+    errors do (usage message, exit 2), not folded into ``main()``'s
+    later ``PermissionError``/``ValueError`` capture-error handling.
+    """
+    if args.filter is None:
+        return None
+    instructions = CANNED_FILTERS.get(args.filter)
+    if instructions is None:
+        try:
+            instructions = compile_expression(args.filter)
+        except BPFCompileError as error:
+            parser.error(str(error))
+    return FilterProgram(instructions)
+
+
+def _build_outputs(
+    args: argparse.Namespace, stats: StatsCollector
+) -> list[Output] | None:
+    """Assemble the output chain, or ``None`` (having already printed a
+    clean error) if ``-w``'s target can't be opened."""
     outputs: list[Output] = [
         OutputToNDJSON()
         if args.json
@@ -242,8 +259,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"{error.strerror or error}",
                 file=sys.stderr,
             )
-            return 1
+            return None
     outputs.append(stats)
+    return outputs
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    _validate_args(args, parser)
+    filter_program = _resolve_filter_program(args, parser)
+
+    stats = StatsCollector()
+    outputs = _build_outputs(args, stats)
+    if outputs is None:
+        return 1
 
     source: AsyncIterator[tuple[bytes, int, str | None]]
     if args.read is not None:

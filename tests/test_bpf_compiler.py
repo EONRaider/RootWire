@@ -500,9 +500,12 @@ class TestGrammarRejection:
         the module docstring): the failure mode for an expression this
         large must be a loud, immediate error, never a silently wrong
         offset, so this test exists to prove the guard actually fires
-        rather than assume it would."""
+        rather than assume it would. This grammar has no bound on
+        expression length, so a real (if unusual) user input can reach
+        this -- it's BPFCompileError, the same as every other
+        rejection, not an internal-only AssertionError."""
         compile_expression(" or ".join(["tcp"] * 21))  # still fits
-        with pytest.raises(AssertionError, match="8-bit range"):
+        with pytest.raises(BPFCompileError, match="8-bit range"):
             compile_expression(" or ".join(["tcp"] * 22))
 
 
@@ -540,3 +543,23 @@ class TestParserAcceptsTheDocumentedGrammar:
         # Every program must end in a ret; nothing else guarantees the
         # VM always terminates instead of running off the end.
         assert program[-1][0] == 0x06
+
+
+class TestVMRejectsUnsupportedOperandForms:
+    """This compiler and the canned filters only ever emit K-form JMP
+    and RET instructions -- these confirm the VM actually notices an
+    X-form or A-form one instead of silently misinterpreting its
+    operand, since a differential test is only as trustworthy as the
+    interpreter running both sides."""
+
+    def test_x_form_jmp_is_rejected(self):
+        # jeq %x (source bit set) instead of jeq #k
+        program = ((0x1D, 0, 0, 0),)  # 0x15 | 0x08 (BPF_X)
+        with pytest.raises(NotImplementedError, match="X-form"):
+            vm_run(program, b"\x00" * 20)
+
+    def test_a_form_ret_is_rejected(self):
+        # ret %a (rval bits 0x10) instead of ret #k
+        program = ((0x16, 0, 0, 0),)  # 0x06 | 0x10 (BPF_A)
+        with pytest.raises(NotImplementedError, match="X/A-form"):
+            vm_run(program, b"\x00" * 20)

@@ -42,6 +42,16 @@ _MODE_MSH = 0xA0
 _JMP_OP_MASK = 0xF0
 _JMP_JEQ = 0x10
 _JMP_JSET = 0x40
+#: JMP/ALU "source" bit: 0 = K (immediate operand), 8 = X (register
+#: operand). This compiler and the canned filters only ever emit
+#: K-form; an X-form op here would silently compare against the wrong
+#: operand if not checked explicitly.
+_SRC_MASK = 0x08
+
+#: RET's return-value source is a *2-bit* field (0x18: K/X/A) that
+#: overlaps but is not the same as JMP's 1-bit _SRC_MASK -- reusing
+#: that check for RET would miss BPF_A (0x10) uncaught.
+_RET_RVAL_MASK = 0x18
 
 
 class _Reject(Exception):
@@ -96,6 +106,10 @@ def _run(program: tuple[SockFilter, ...], packet: bytes) -> int:
             pc += 1
 
         elif instruction_class == _JMP:
+            if code & _SRC_MASK:
+                raise NotImplementedError(
+                    f"unsupported JMP source (X-form) in {code:#x}"
+                )
             op = code & _JMP_OP_MASK
             if op == _JMP_JEQ:
                 taken = accumulator == k
@@ -106,6 +120,10 @@ def _run(program: tuple[SockFilter, ...], packet: bytes) -> int:
             pc += (jt if taken else jf) + 1
 
         elif instruction_class == _RET:
+            if code & _RET_RVAL_MASK:
+                raise NotImplementedError(
+                    f"unsupported RET source (X/A-form) in {code:#x}"
+                )
             return k
 
         else:

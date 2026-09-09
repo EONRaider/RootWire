@@ -32,6 +32,15 @@ compiler cannot represent exactly is rejected, not approximated.
   IPv6's ``next_header`` directly at the fixed post-header offset,
   the same simplification tcpdump's own compiler makes for this
   primitive (confirmed by comparing against ``tcpdump -dd``).
+- SCTP: ``port``/``src port``/``dst port`` match TCP and UDP only.
+  tcpdump's own bare ``port N`` (confirmed via ``tcpdump -dd``) also
+  matches SCTP traffic on that port, even though tcpdump has no
+  ``sctp`` protocol keyword of its own either — a strict subset of
+  tcpdump's real primitive, not "exactly" it. This grammar's own
+  protocol list (``tcp``/``udp``/``icmp``/``arp``/``ip``/``ip6``) has
+  no SCTP concept anywhere, so ``port`` staying symmetric with that
+  list, rather than silently matching a protocol nothing else in this
+  grammar can name or exclude, is the more honest scope boundary.
 
 ## Correctness strategy
 
@@ -68,11 +77,14 @@ optimizations:
 - A resolution pass turns every label reference into the relative
   instruction-count offset classic BPF's 8-bit ``jt``/``jf`` fields
   need. Every jump this compiler emits points forward only (the
-  layout above never needs a backward jump), which easily stays
-  within that 8-bit range for expressions of the size this grammar
-  can even express — checked, not assumed: resolution asserts the
-  computed offset fits, so a future change that breaks the assumption
-  fails loudly instead of emitting a silently wrong offset.
+  layout above never needs a backward jump), so the offset is always
+  non-negative — but this grammar has no bound on expression length
+  (``and``/``or`` chain arbitrarily), so a long enough chain can
+  genuinely exceed the 8-bit range. Resolution checks the computed
+  offset rather than assuming it fits, raising :class:`BPFCompileError`
+  for an expression too large for this codegen, the same as any other
+  rejection — not a silently wrong offset, and not an internal-only
+  assertion either, since ordinary user input can reach it.
 """
 
 from __future__ import annotations
@@ -372,7 +384,7 @@ class _Label:
     def __init__(self, hint: str) -> None:
         self.hint = hint
 
-    def __repr__(self) -> str:
+    def __repr__(self) -> str:  # pragma: no cover -- debugging aid only
         return f"<Label {self.hint}>"
 
 
@@ -549,13 +561,19 @@ def _compile_port_v6(
     on_false: _Label,
     e: _Emitter,
 ) -> None:
-    """No extension-header walk and no fragmentation check here — this
-    matches tcpdump's own ``port`` compilation for IPv6 exactly
-    (confirmed via `tcpdump -dd port N`), not an extra simplification
-    on top of it. IPv6 fragmentation instead uses its own dedicated
+    """No extension-header walk and no fragmentation check here — not
+    an extra simplification on top of tcpdump's own IPv6 ``port``
+    compilation, which skips both the same way (confirmed via
+    ``tcpdump -dd port N``): IPv6 fragmentation uses its own dedicated
     Fragment extension header, entirely absent from a non-fragmented
     packet's header chain, so a plain ``next_header`` check already
-    behaves correctly for the common case this primitive targets."""
+    behaves correctly for the common case this primitive targets.
+
+    This does *not* match tcpdump's real ``port`` exactly, though: it
+    checks TCP and UDP only, not SCTP — see the module docstring's
+    "Deliberately out of scope" list for why that is a considered
+    scope boundary, not an oversight.
+    """
     check_udp = e.new_label("v6_check_udp")
     matched = e.new_label("v6_matched_transport")
     _test_at(
@@ -664,12 +682,21 @@ def _compile(
 
 def _resolve(items: list[_Label | _PInsn]) -> tuple[SockFilter, ...]:
     """Turn every label reference into the relative instruction-count
-    offset classic BPF's 8-bit ``jt``/``jf`` fields need. Every jump
-    this compiler emits points forward (the layout in ``_compile``
-    never needs a backward jump — booleans compile to a strictly
-    forward-flowing sequence of tests), so every resolved offset comes
-    out non-negative by construction; the range check below is a
-    correctness assertion on that claim, not a feature."""
+    offset classic BPF's 8-bit ``jt``/``jf`` fields need.
+
+    Every jump this compiler emits points forward — the layout in
+    ``_compile`` never needs a backward jump, booleans compile to a
+    strictly forward-flowing sequence of tests — so the *lower* bound
+    (``offset >= 0``) holds by construction. The *upper* bound
+    (``offset <= 255``) does not: this grammar has no bound on
+    expression length (``and``/``or`` chain arbitrarily), so a long
+    enough chain genuinely can overflow it — confirmed by finding the
+    exact breaking point in ``test_bpf_compiler.py`` (22 ORed
+    primitives; 21 still compiles). That makes this a real,
+    user-reachable compile failure, not an internal invariant: it
+    raises :class:`BPFCompileError`, the same as every other rejection
+    in this module, not ``AssertionError``.
+    """
     positions: dict[int, int] = {}
     index = 0
     for item in items:
@@ -684,10 +711,10 @@ def _resolve(items: list[_Label | _PInsn]) -> tuple[SockFilter, ...]:
         target = positions[id(label)]
         offset = target - (from_index + 1)
         if not (0 <= offset <= 255):
-            raise AssertionError(
-                f"jump offset {offset} for label {label!r} is out of "
-                f"cBPF's 8-bit range -- expression is too large for "
-                f"this codegen's forward-only, unoptimized layout"
+            raise BPFCompileError(
+                f"expression compiles to a jump offset of {offset} "
+                f"instructions, outside cBPF's 8-bit range (0-255) -- "
+                f"too large an expression for this compiler"
             )
         return offset
 
