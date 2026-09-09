@@ -78,23 +78,29 @@ class TestWriteErrorHandling:
 
 
 class _SignalDeliveringSocket:
-    """Fake capture socket whose recv() simulates real SIGTERM delivery
-    by invoking whatever handler main() currently has installed for it
-    (fetched dynamically via signal.getsignal), instead of blocking.
+    """Fake capture socket whose recvmsg() simulates real SIGTERM
+    delivery by invoking whatever handler main() currently has
+    installed for it (fetched dynamically via signal.getsignal),
+    instead of blocking.
 
     This exercises the exact function main() registers and the exact
     exception-propagation path a live interruption would take — through
-    capture()'s generator, out of recv(), through run()'s loop — without
-    sending a real signal to the test process.
+    capture()'s generator, out of recvmsg(), through run()'s loop —
+    without sending a real signal to the test process.
     """
 
     def __init__(self, *args: int) -> None:
         pass
 
+    def setsockopt(self, level: int, optname: int, value: int) -> None:
+        pass
+
     def bind(self, address: tuple[str, int]) -> None:
         pass
 
-    def recv(self, size: int) -> bytes:
+    def recvmsg(
+        self, bufsize: int, ancbufsize: int
+    ) -> tuple[bytes, list, int, None]:
         handler = signal.getsignal(signal.SIGTERM)
         if not callable(handler):
             raise AssertionError(

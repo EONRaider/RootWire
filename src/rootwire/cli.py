@@ -118,7 +118,7 @@ def _same_file(a: str, b: str) -> bool:
 
 
 def run(
-    source: Iterator[tuple[bytes, float]],
+    source: Iterator[tuple[bytes, int]],
     interface: str | None,
     outputs: Sequence[Output],
 ) -> int:

@@ -59,7 +59,7 @@ def decode_frame(
     data: bytes,
     *,
     number: int,
-    timestamp: float,
+    timestamp: int,
     interface: str | None,
 ) -> DecodedFrame:
     """Decode one captured frame.

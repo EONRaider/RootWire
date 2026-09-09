@@ -22,7 +22,9 @@ class DecodedFrame:
 
     :param number: Position of this frame in the capture, counted
         from 1.
-    :param timestamp: Capture time in seconds since the Unix epoch.
+    :param timestamp: Capture time in nanoseconds since the Unix epoch
+        — the kernel's own clock (``SO_TIMESTAMPNS``) for live capture,
+        preserved losslessly through nanosecond-precision pcap files.
     :param interface: Interface the frame was captured on, or ``None``
         when listening on all interfaces.
     :param length: Number of bytes captured for this frame.
@@ -46,7 +48,7 @@ class DecodedFrame:
     """
 
     number: int
-    timestamp: float
+    timestamp: int
     interface: str | None
     length: int
     layers: tuple[Protocol, ...]

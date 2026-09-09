@@ -1,18 +1,21 @@
 """Classic pcap file writing and replay, dependency-free.
 
 The writer emits the classic (not pcapng) format: a 24-byte global
-header — magic ``0xA1B2C3D4``, version 2.4, thiszone 0, sigfigs 0,
+header — magic ``0xA1B23C4D``, version 2.4, thiszone 0, sigfigs 0,
 snaplen matching the capture buffer, linktype 1 (Ethernet) — followed
-by 16-byte per-record headers. Timestamps are written with microsecond
-precision, little-endian, which every tool (Wireshark, tcpdump, tshark)
-reads.
+by 16-byte per-record headers. Timestamps are written with nanosecond
+precision, little-endian: this is a long-established classic-pcap
+variant every tool that matters (Wireshark, tcpdump, tshark) already
+reads, and it is what makes the kernel-timestamp precision RootWire
+captures (``SO_TIMESTAMPNS``) survive to disk losslessly instead of
+being rounded to microseconds on write.
 
-The reader accepts both byte orders and the nanosecond-precision magic
-(``0xA1B23C4D``), validates that the file carries Ethernet frames
-before handing them to an Ethernet decoder, and deliberately has the
-same shape as :func:`rootwire.capture.capture` — so replaying a
-file is a drop-in frame source for the whole pipeline, no root
-required.
+The reader accepts both byte orders and both timestamp precisions
+(including foreign/older microsecond-precision captures), validates
+that the file carries Ethernet frames before handing them to an
+Ethernet decoder, and deliberately has the same shape as
+:func:`rootwire.capture.capture` — so replaying a file is a drop-in
+frame source for the whole pipeline, no root required.
 
 ``orig_len`` is written equal to ``incl_len``: a frame delivered by
 ``recv()`` carries no record of a kernel-side truncation, so the
@@ -43,7 +46,8 @@ _RECORD_HEADER = struct.Struct("<IIII")
 
 
 class PcapWriter:
-    """Write frames to a classic pcap file; usable as a context manager.
+    """Write frames to a nanosecond-precision classic pcap file; usable
+    as a context manager.
 
     >>> with PcapWriter("capture.pcap") as writer:
     ...     writer.write(frame_bytes, timestamp)
@@ -53,7 +57,7 @@ class PcapWriter:
         self._file: BinaryIO = open(path, "wb")  # noqa: SIM115
         self._file.write(
             _GLOBAL_HEADER.pack(
-                _MAGIC_MICROSECONDS,
+                _MAGIC_NANOSECONDS,
                 2,  # version major
                 4,  # version minor
                 0,  # thiszone
@@ -63,18 +67,15 @@ class PcapWriter:
             )
         )
 
-    def write(self, data: bytes, timestamp: float | None = None) -> None:
-        """Append one frame with the given capture timestamp (now, if
-        omitted)."""
+    def write(self, data: bytes, timestamp: int | None = None) -> None:
+        """Append one frame with the given capture timestamp — integer
+        nanoseconds since the Unix epoch — defaulting to now if
+        omitted."""
         if timestamp is None:
-            timestamp = time.time()
-        ts_sec = int(timestamp)
-        ts_usec = round((timestamp - ts_sec) * 1_000_000)
-        if ts_usec == 1_000_000:  # rounding carried into the next second
-            ts_sec += 1
-            ts_usec = 0
+            timestamp = time.time_ns()
+        ts_sec, ts_nsec = divmod(timestamp, 1_000_000_000)
         self._file.write(
-            _RECORD_HEADER.pack(ts_sec, ts_usec, len(data), len(data))
+            _RECORD_HEADER.pack(ts_sec, ts_nsec, len(data), len(data))
         )
         self._file.write(data)
 
@@ -93,12 +94,15 @@ class PcapWriter:
         self.close()
 
 
-def read_pcap(path: str | Path) -> Iterator[tuple[bytes, float]]:
+def read_pcap(path: str | Path) -> Iterator[tuple[bytes, int]]:
     """Yield ``(frame, timestamp)`` pairs from a classic pcap file.
 
-    Accepts both byte orders and both timestamp precisions; rejects
-    files whose linktype is not Ethernet (nothing else can be fed to
-    an Ethernet decoder) and files that end mid-record.
+    ``timestamp`` is always integer nanoseconds since the Unix epoch,
+    regardless of the file's on-disk precision: a microsecond-precision
+    file's fractional field is scaled by 1000, which is exact (no
+    precision is invented, none is lost). Accepts both byte orders;
+    rejects files whose linktype is not Ethernet (nothing else can be
+    fed to an Ethernet decoder) and files that end mid-record.
 
     :raises ValueError: If the file is not classic pcap, carries a
         non-Ethernet linktype, or is truncated.
@@ -114,7 +118,7 @@ def read_pcap(path: str | Path) -> Iterator[tuple[bytes, float]]:
         endian, magic = ">", magic_be
     else:
         raise ValueError(f"{path}: not a classic pcap file")
-    divisor = 1e6 if magic == _MAGIC_MICROSECONDS else 1e9
+    frac_to_ns = 1 if magic == _MAGIC_NANOSECONDS else 1000
     (network,) = struct.unpack_from(f"{endian}I", data, 20)
     if network != _LINKTYPE_ETHERNET:
         raise ValueError(
@@ -132,6 +136,6 @@ def read_pcap(path: str | Path) -> Iterator[tuple[bytes, float]]:
             raise ValueError(f"{path}: truncated frame data")
         yield (
             bytes(data[cursor : cursor + incl_len]),
-            ts_sec + ts_frac / divisor,
+            ts_sec * 1_000_000_000 + ts_frac * frac_to_ns,
         )
         cursor += incl_len
