@@ -99,6 +99,8 @@ class TestOutputToScreen:
     def test_dhcp_rendering(self, dhcp_frame):
         text = render(dhcp_frame)
         assert "DHCP ACK" in text
+        assert "Client: 00:07:0d:af:f4:54" in text
+        assert "XID: 0x3903f326" in text
         assert "Your Addr: 192.168.1.96" in text
         assert "Server Addr: 192.168.1.254" in text
         assert "Options: 3 parsed" in text
@@ -111,6 +113,7 @@ class TestDNSRendering:
         pcap = FIXTURES / "udp_dns.pcap"
         texts = [render(frame) for frame in read_pcap(pcap)]
         assert any("DNS response" in text for text in texts)
+        assert any("Q: " in text for text in texts)
         assert any("A: " in text for text in texts)
 
     def test_dns_question_name_ansi_escapes_are_neutralized(self):

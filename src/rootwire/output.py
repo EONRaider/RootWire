@@ -316,6 +316,10 @@ class OutputToScreen(Output):
         try:
             message_type = layer.message_type_name
         except InvalidFieldError:
+            # message_type_name and parsed_options both read the same
+            # underlying option_map, so a malformed options section
+            # raises identically from either -- falling back silently
+            # here is safe: the [!] diagnostic below still fires.
             message_type = None
         self._print(f"{_I}[+] DHCP {message_type or layer.op_name}")
         self._print(
