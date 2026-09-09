@@ -10,12 +10,11 @@ stderr, so stdout stays clean for machine-readable output
 from __future__ import annotations
 
 import argparse
+import asyncio
 import os
 import signal
 import sys
-from collections.abc import Iterator, Sequence
-from types import FrameType
-from typing import NoReturn
+from collections.abc import AsyncIterator, Iterator, Sequence
 
 from rootwire import __version__
 from rootwire.bpf import CANNED_FILTERS, FilterProgram
@@ -43,8 +42,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-i",
         "--interface",
+        action="append",
         default=None,
-        help="interface to capture frames from (default: all interfaces)",
+        help=(
+            "interface to capture frames from; repeat to capture on "
+            "several interfaces concurrently (default: all interfaces)"
+        ),
     )
     parser.add_argument(
         "-r",
@@ -92,26 +95,6 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-class _Terminated(KeyboardInterrupt):
-    """Raised by the SIGTERM handler.
-
-    A :class:`KeyboardInterrupt` subclass so a SIGTERM abort shares
-    Ctrl-C's shutdown path (flush outputs, report stats, exit 0) without
-    a second ``except`` clause, while still being distinguishable for the
-    shutdown message.
-    """
-
-
-def _raise_terminated(signum: int, frame: FrameType | None) -> NoReturn:
-    """SIGTERM handler: raise to interrupt whatever is currently
-    blocked (a raw-socket ``recv`` or the replay loop) instead of
-    Python's default disposition, which terminates the process outright
-    and skips ``finally`` blocks — losing unflushed output and the
-    stats summary.
-    """
-    raise _Terminated
-
-
 def _same_file(a: str, b: str) -> bool:
     """Whether two path strings name the same file on disk.
 
@@ -127,9 +110,30 @@ def _same_file(a: str, b: str) -> bool:
         return os.path.realpath(a) == os.path.realpath(b)
 
 
-def run(
-    source: Iterator[tuple[bytes, int]],
-    interface: str | None,
+async def _replay_source(
+    frames: Iterator[tuple[bytes, int]], interface: str
+) -> AsyncIterator[tuple[bytes, int, str]]:
+    """Adapt :func:`rootwire.pcap.read_pcap`'s sync ``(bytes,
+    timestamp)`` pairs into the async ``(bytes, timestamp, interface)``
+    triples :func:`run` expects from every source, tagging every frame
+    with the replayed file's path — a classic pcap file carries no
+    interface metadata of its own.
+
+    The ``await asyncio.sleep(0)`` per frame is not a formality: a bare
+    ``for: yield`` loop with no real ``await`` inside never actually
+    hands control back to the event loop between items, so a task
+    cancelled from outside (SIGTERM, via ``_drive()``) would not be
+    able to interrupt it until the *entire* file finished replaying —
+    confirmed empirically, not assumed, since the failure mode is easy
+    to miss on the small fixtures this project's own tests replay.
+    """
+    for data, timestamp in frames:
+        await asyncio.sleep(0)
+        yield data, timestamp, interface
+
+
+async def run(
+    source: AsyncIterator[tuple[bytes, int, str | None]],
     outputs: Sequence[Output],
 ) -> int:
     """Decode and dispatch every frame the source yields.
@@ -137,13 +141,44 @@ def run(
     :returns: The number of frames processed.
     """
     number = 0
-    for number, (data, timestamp) in enumerate(source, start=1):
+    async for data, timestamp, interface in source:
+        number += 1
         frame = decode_frame(
             data, number=number, timestamp=timestamp, interface=interface
         )
         for output in outputs:
             output.update(frame)
     return number
+
+
+async def _drive(
+    source: AsyncIterator[tuple[bytes, int, str | None]],
+    outputs: Sequence[Output],
+) -> int:
+    """Run :func:`run` to completion, converting ``SIGTERM`` into the
+    same orderly cancellation Ctrl-C already gets for free.
+
+    ``asyncio.run`` (via ``asyncio.Runner``, since Python 3.11) installs
+    its own ``SIGINT`` handler that cancels the running task and
+    re-raises the cancellation as ``KeyboardInterrupt`` at the
+    ``asyncio.run`` call site — indistinguishable from the old
+    synchronous Ctrl-C path, so it needs no code here at all. A
+    cancellation *this* function triggers itself, via ``SIGTERM``, is
+    not eligible for that conversion (it is specific to ``Runner``'s own
+    internal counter) and surfaces as a plain ``asyncio.CancelledError``
+    instead — which is exactly how ``main()`` tells the two apart.
+    """
+    loop = asyncio.get_running_loop()
+    task = asyncio.ensure_future(run(source, outputs))
+    loop.add_signal_handler(signal.SIGTERM, task.cancel)
+    try:
+        return await task
+    finally:
+        # Only undoes *this* registration; main() separately restores
+        # whatever SIGTERM disposition the caller had before main() was
+        # ever called — remove_signal_handler always resets to SIG_DFL,
+        # not "whatever was there before", which is not the same thing.
+        loop.remove_signal_handler(signal.SIGTERM)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -190,21 +225,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
     outputs.append(stats)
 
+    source: AsyncIterator[tuple[bytes, int, str | None]]
     if args.read is not None:
         from rootwire.pcap import read_pcap
 
-        source = read_pcap(args.read)
-        interface = args.read
+        source = _replay_source(read_pcap(args.read), args.read)
     else:
-        from rootwire.capture import capture  # Linux-only import
+        from rootwire.capture import capture_async  # Linux-only import
 
         filter_program = (
             FilterProgram(CANNED_FILTERS[args.filter])
             if args.filter is not None
             else None
         )
-        source = capture(args.interface, filter_program)
-        interface = args.interface
+        source = capture_async(args.interface, filter_program)
 
     print(
         "[>>>] RootWire initialized. "
@@ -222,9 +256,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     # Python's default disposition (immediate termination, no `finally`,
     # unflushed output). Restored below so importing rootwire as a
     # library never hijacks the caller's signal handling.
-    previous_sigterm_handler = signal.signal(signal.SIGTERM, _raise_terminated)
+    previous_sigterm_handler = signal.getsignal(signal.SIGTERM)
     try:
-        run(source, interface, outputs)
+        asyncio.run(_drive(source, outputs))
         report_stats = True
     except PermissionError:
         print(
@@ -237,13 +271,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ValueError as e:  # unreadable/foreign pcap on -r
         print(f"Error: {e}", file=sys.stderr)
         exit_code = 1
-    except KeyboardInterrupt as abort:
-        print(
-            "[!] Terminated."
-            if isinstance(abort, _Terminated)
-            else "[!] Capture aborted.",
-            file=sys.stderr,
-        )
+    except KeyboardInterrupt:
+        print("[!] Capture aborted.", file=sys.stderr)
+        report_stats = True
+    except asyncio.CancelledError:  # SIGTERM, via _drive()
+        print("[!] Terminated.", file=sys.stderr)
         report_stats = True
     finally:
         signal.signal(signal.SIGTERM, previous_sigterm_handler)

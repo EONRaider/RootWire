@@ -13,10 +13,11 @@ One frame flows from a source, through the decoder, to every output:
 
 ```mermaid
 flowchart LR
-  S[AF_PACKET socket] -->|bytes| C[capture.py]
+  S[AF_PACKET socket per interface] -->|bytes| C[capture.py capture_async]
   F[pcap file] -->|bytes| P[pcap.py read_pcap]
-  C -->|"bytes + timestamp"| D[decoder.py]
-  P -->|"bytes + timestamp"| D
+  C -->|"bytes + timestamp + interface"| D[decoder.py]
+  P -->|"bytes + timestamp"| A[cli.py _replay_source]
+  A -->|"bytes + timestamp + interface"| D
   D -->|DecodedFrame| O1[screen renderer]
   D -->|DecodedFrame| O2[NDJSON stream]
   D -->|DecodedFrame| O3[pcap writer]
@@ -24,21 +25,29 @@ flowchart LR
   CLI[cli.py] -.wires and runs.-> C & P & D & O1 & O2 & O3 & O4
 ```
 
-- **[`capture.py`](src/rootwire/capture.py)** opens a raw `AF_PACKET`
-  socket (every EtherType, one interface or all), optionally attaches
-  a kernel-side capture filter, and yields `(bytes, timestamp)` pairs
-  forever.
+- **[`capture.py`](src/rootwire/capture.py)** opens one raw
+  `AF_PACKET` socket per requested interface (every EtherType; a
+  single unbound socket for "all interfaces"), optionally attaches a
+  kernel-side capture filter to each, and merges them into one
+  `async` stream of `(bytes, timestamp, interface)` triples —
+  `capture_async()` registers every socket with the running event
+  loop (`add_reader`) and yields whichever socket has data next, so
+  capturing on several interfaces concurrently is the same code path
+  as capturing on one, not a separate mode.
 - **[`bpf.py`](src/rootwire/bpf.py)** holds the canned classic-BPF
   (cBPF) programs `--filter` selects from and the `SO_ATTACH_FILTER`
   plumbing `capture.py` calls into. Each canned program's bytecode is
   a golden fixture, checked byte-for-byte against `tcpdump -dd`.
 - **[`pcap.py`](src/rootwire/pcap.py)** reads and writes classic pcap,
-  dependency-free. `read_pcap()` deliberately has **the same shape as
-  `capture()`**, so `-r FILE` is a drop-in frame source — the whole
-  pipeline runs against a file, no privileges needed. The reader
-  handles both byte orders and nanosecond-precision files, and refuses
-  non-Ethernet linktypes (nothing else can be fed to an Ethernet
-  decoder).
+  dependency-free. `read_pcap()` yields `(bytes, timestamp)` pairs;
+  `cli.py`'s `_replay_source()` adapts that into the same
+  `(bytes, timestamp, interface)` shape `capture_async()` produces —
+  tagging every replayed frame with the file's path, since a classic
+  pcap file carries no interface metadata of its own — so `-r FILE` is
+  a drop-in frame source and the whole pipeline runs against a file,
+  no privileges needed. The reader handles both byte orders and
+  nanosecond-precision files, and refuses non-Ethernet linktypes
+  (nothing else can be fed to an Ethernet decoder).
 - **[`decoder.py`](src/rootwire/decoder.py)** turns one frame's bytes
   into a `DecodedFrame` — a pure function with no state between calls.
 - **[`frame.py`](src/rootwire/frame.py)** defines `DecodedFrame`:
@@ -49,7 +58,10 @@ flowchart LR
   behind one small `Output` interface: the screen renderer, the NDJSON
   stream, the pcap writer, and the statistics collector.
 - **[`cli.py`](src/rootwire/cli.py)** parses arguments, picks the
-  source, assembles the outputs, and runs the loop.
+  source, assembles the outputs, and drives the async loop
+  (`asyncio.run()`) — including converting `SIGTERM` into the same
+  orderly cancellation Ctrl-C already gets for free from Python 3.11's
+  `asyncio.Runner`.
 
 ## Why root, and why Linux-only
 
@@ -74,9 +86,9 @@ network.
 A capture session may run for hours at thousands of frames per second,
 so the memory story is engineered, not accidental:
 
-1. `capture()` yields **one freshly allocated, immutable `bytes`
+1. `capture_async()` yields **one freshly allocated, immutable `bytes`
    object per frame** — never a reused buffer. Nothing that happens
-   later can be corrupted by the next `recv`.
+   later can be corrupted by the next `recvmsg`.
 2. `decode_frame()` wraps it in a `memoryview` so walking the layers
    slices without copying; every value it *keeps* (fields, options,
    payload) is materialized, and `frame.raw` simply holds the original

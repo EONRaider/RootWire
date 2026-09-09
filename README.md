@@ -54,7 +54,8 @@ rootwire [-h] [-i INTERFACE] [-r FILE] [-w FILE]
          [--filter {arp,ip6,tcp,udp}] [--json] [-d] [--version]
 
 options:
-  -i, --interface   interface to capture frames from (default: all interfaces)
+  -i, --interface   interface to capture frames from; repeat to capture on
+                    several interfaces concurrently (default: all interfaces)
   -r, --read FILE   replay frames from a classic pcap file instead of live
                     capture (no privileges required)
   -w, --write FILE  also write every captured frame to a classic pcap file
@@ -72,6 +73,7 @@ ends. Some favorite combinations:
 ```
 sudo rootwire -i eth0 -w session.pcap        # capture and keep the evidence
 sudo rootwire -i eth0 --filter tcp           # drop non-TCP in the kernel
+sudo rootwire -i eth0 -i wlan0               # merge two interfaces into one stream
 rootwire -r session.pcap                     # inspect it later, no root
 rootwire -r session.pcap --json | jq .       # machine-readable analysis
 ```
@@ -83,14 +85,16 @@ privileges. From a clone, run it as `sudo .venv/bin/python -m rootwire`.
 
 ## How it works
 
-`capture.py` yields raw frames from an `AF_PACKET` socket (or
-`pcap.py` replays them from a file — the two sources are
-interchangeable); `decoder.py` walks each frame's protocol chain into
-an immutable `DecodedFrame`; outputs — the screen renderer, the NDJSON
-stream, the pcap writer, the statistics collector — consume every
-frame through one small `Output` interface. The full tour, including
-why memory stays flat during long captures and how to add an output,
-is in [ARCHITECTURE.md](ARCHITECTURE.md).
+`capture.py`'s `capture_async()` yields raw frames — merged from one
+`AF_PACKET` socket per interface — as `(bytes, timestamp, interface)`
+triples; replaying from a file with `-r` adapts `pcap.py`'s frames
+into that same shape before either source reaches `decoder.py`, which
+walks each frame's protocol chain into an immutable `DecodedFrame`.
+Outputs — the screen renderer, the NDJSON stream, the pcap writer, the
+statistics collector — consume every frame through one small `Output`
+interface. The full tour, including why memory stays flat during long
+captures and how to add an output, is in
+[ARCHITECTURE.md](ARCHITECTURE.md).
 
 Everything except the raw socket runs on any OS, so the test suite —
 which includes a 65-frame corpus of real captured traffic replayed
@@ -104,7 +108,6 @@ uv run pytest
 
 - Compile tcpdump-style filter expressions (`tcp port 80`, `host 1.2.3.4`)
   to BPF; a canned set (`--filter tcp/udp/arp/ip6`) already ships
-- Concurrent multi-interface capture
 - Checksum verification rendering (the library already computes them)
 
 ## Contributing
