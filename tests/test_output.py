@@ -116,3 +116,46 @@ class TestExtensionHeaderRendering:
         ]
         assert any("first fragment" in text for text in texts)
         assert any("fragment at offset" in text for text in texts)
+
+
+class TestChecksumVerification:
+    def test_valid_udp_checksum_shows_no_mismatch(self):
+        payload = b"hello"
+        udp = UDP(
+            src_port=1234, dst_port=53, length=8 + len(payload), checksum=0
+        )
+        ip = _ipv4(protocol=17, total_length=20 + 8 + len(payload))
+        packet = Packet(_eth(0x0800), ip, udp).with_checksums(payload)
+        assert "mismatch" not in render(bytes(packet) + payload)
+
+    def test_corrupted_udp_checksum_is_flagged(self):
+        payload = b"hello"
+        udp = UDP(
+            src_port=1234, dst_port=53, length=8 + len(payload), checksum=0
+        )
+        ip = _ipv4(protocol=17, total_length=20 + 8 + len(payload))
+        packet = Packet(_eth(0x0800), ip, udp).with_checksums(payload)
+        frame = bytearray(bytes(packet) + payload)
+        frame[40] ^= 0xFF  # UDP checksum's high byte (14 eth + 20 ip + 6)
+        text = render(bytes(frame))
+        assert "UDP" in text
+        assert "[!] mismatch" in text
+
+    def test_corrupted_ipv4_header_checksum_is_flagged(self, udp_frame):
+        frame = bytearray(udp_frame)
+        frame[24] ^= 0xFF  # IPv4 checksum's high byte (14 eth + 10)
+        text = render(bytes(frame))
+        assert "IPv4" in text
+        assert "[!] mismatch" in text
+
+    def test_fragment_checksums_are_not_verified(self):
+        """A fragment's ICMP checksum covers the *reassembled* message,
+        which RootWire never builds -- verifying it against a lone
+        fragment's bytes would always disagree, so it must not even be
+        attempted (the real corpus's checksums are independently known
+        good; a "mismatch" here would be this feature lying)."""
+        from conftest import FIXTURES, read_pcap
+
+        for pcap_name in ("ipv4_fragments.pcap", "ipv6_fragments.pcap"):
+            for frame in read_pcap(FIXTURES / pcap_name):
+                assert "mismatch" not in render(frame)
