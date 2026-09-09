@@ -70,6 +70,55 @@ def run(program: tuple[SockFilter, ...], packet: bytes) -> int:
         return 0
 
 
+def _step_ld(code: int, k: int, packet: bytes, index_reg: int) -> int:
+    """Execute one LD (absolute or indexed) instruction; returns the
+    new accumulator value."""
+    mode = code & _MODE_MASK
+    size = _SIZE_BYTES[code & _SIZE_MASK]
+    if mode == _MODE_ABS:
+        offset = k
+    elif mode == _MODE_IND:
+        offset = index_reg + k
+    else:
+        raise NotImplementedError(f"unsupported LD mode in {code:#x}")
+    return _load(packet, offset, size)
+
+
+def _step_ldx(code: int, k: int, packet: bytes) -> int:
+    """Execute one LDX (the IHL-nibble ``ldxb`` trick) instruction;
+    returns the new index register value."""
+    if code & _MODE_MASK != _MODE_MSH:
+        raise NotImplementedError(f"unsupported LDX mode in {code:#x}")
+    return 4 * (_load(packet, k, 1) & 0x0F)
+
+
+def _step_jmp(code: int, k: int, jt: int, jf: int, accumulator: int) -> int:
+    """Execute one JMP (K-form ``jeq``/``jset`` only) instruction;
+    returns the ``pc`` delta to apply."""
+    if code & _SRC_MASK:
+        raise NotImplementedError(
+            f"unsupported JMP source (X-form) in {code:#x}"
+        )
+    op = code & _JMP_OP_MASK
+    if op == _JMP_JEQ:
+        taken = accumulator == k
+    elif op == _JMP_JSET:
+        taken = (accumulator & k) != 0
+    else:
+        raise NotImplementedError(f"unsupported JMP op in {code:#x}")
+    return (jt if taken else jf) + 1
+
+
+def _step_ret(code: int, k: int) -> int:
+    """Execute one RET (K-form only) instruction; returns the program's
+    result."""
+    if code & _RET_RVAL_MASK:
+        raise NotImplementedError(
+            f"unsupported RET source (X/A-form) in {code:#x}"
+        )
+    return k
+
+
 def _run(program: tuple[SockFilter, ...], packet: bytes) -> int:
     accumulator = 0
     index_reg = 0
@@ -88,44 +137,15 @@ def _run(program: tuple[SockFilter, ...], packet: bytes) -> int:
         instruction_class = code & _CLASS_MASK
 
         if instruction_class == _LD:
-            mode = code & _MODE_MASK
-            size = _SIZE_BYTES[code & _SIZE_MASK]
-            if mode == _MODE_ABS:
-                offset = k
-            elif mode == _MODE_IND:
-                offset = index_reg + k
-            else:
-                raise NotImplementedError(f"unsupported LD mode in {code:#x}")
-            accumulator = _load(packet, offset, size)
+            accumulator = _step_ld(code, k, packet, index_reg)
             pc += 1
-
         elif instruction_class == _LDX:
-            if code & _MODE_MASK != _MODE_MSH:
-                raise NotImplementedError(f"unsupported LDX mode in {code:#x}")
-            index_reg = 4 * (_load(packet, k, 1) & 0x0F)
+            index_reg = _step_ldx(code, k, packet)
             pc += 1
-
         elif instruction_class == _JMP:
-            if code & _SRC_MASK:
-                raise NotImplementedError(
-                    f"unsupported JMP source (X-form) in {code:#x}"
-                )
-            op = code & _JMP_OP_MASK
-            if op == _JMP_JEQ:
-                taken = accumulator == k
-            elif op == _JMP_JSET:
-                taken = (accumulator & k) != 0
-            else:
-                raise NotImplementedError(f"unsupported JMP op in {code:#x}")
-            pc += (jt if taken else jf) + 1
-
+            pc += _step_jmp(code, k, jt, jf, accumulator)
         elif instruction_class == _RET:
-            if code & _RET_RVAL_MASK:
-                raise NotImplementedError(
-                    f"unsupported RET source (X/A-form) in {code:#x}"
-                )
-            return k
-
+            return _step_ret(code, k)
         else:
             raise NotImplementedError(
                 f"unsupported instruction class in {code:#x}"
