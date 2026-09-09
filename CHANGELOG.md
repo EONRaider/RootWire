@@ -23,6 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "chain still going after N headers (...)" instead of "decode chain
   exceeded N layers"); every other error message is unchanged, since
   each already names its own protocol in its text (#74).
+- Replay's non-Ethernet-linktype rejection (previously classic-pcap
+  only) now also covers pcapng, checked against *every* declared
+  Interface Description Block before any frame is decoded — an
+  Enhanced Packet Block can reference any interface a preceding IDB
+  declared, not just the first one, so checking only the first would
+  miss a crafted file mixing an Ethernet IDB with a non-Ethernet one.
+  Nothing else stops a wrong link type from silently decoding into
+  nonsense, since `Ethernet` accepts any 14+ bytes structurally (#77).
 
 ### Added
 - **Screen renderers for DNS, DNS-over-TCP, and DHCP.** These already
@@ -47,6 +55,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   diagnostic instead of raising if malformed, matching the DNS/DHCP
   renderers' contract for the same reason: parsed on demand, not
   validated at decode time (#76).
+- **`-r/--read` now replays pcapng captures, not just classic pcap.**
+  RootWire's own reader was classic-pcap-only (an explicit descope of
+  the original pcap/replay work); the read path now delegates to
+  NETProtocols' `read_captures()`, which auto-detects the format from
+  its magic bytes. `rootwire.pcap.read_pcap()` is renamed
+  `read_captures()` to match — a break only for code embedding
+  RootWire as a library and importing that function by name, not for
+  any CLI usage. `-w`/`PcapWriter` are unaffected: NETProtocols ships
+  no writer, so `-w` still emits classic pcap only (#77).
 
 ## [6.0.0] - 2026-09-09
 
