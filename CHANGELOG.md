@@ -22,6 +22,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tcpdump, tshark) already reads, and the only way the improved
   capture precision survives to disk. Replay (`-r`) still reads both
   precisions losslessly (#59).
+- **BREAKING (library API):** `-i`/`--interface` is now repeatable —
+  `-i eth0 -i wlan0` captures on both interfaces concurrently, merged
+  into one decoded stream, each frame tagged with the interface it
+  actually arrived on. Existing single-use invocations (`-i eth0`) are
+  unaffected. Live capture is now backed by an asyncio event loop
+  internally (one raw socket per requested interface, multiplexed via
+  `add_reader`); the public `rootwire.capture.capture()` sync generator
+  is replaced by `rootwire.capture.capture_async()`, an async
+  generator with a different signature — a break only for code
+  embedding RootWire as a library and calling `capture()` directly,
+  not for any CLI usage (#61).
 
 ### Added
 - **`--filter {tcp,udp,arp,ip6}`**: attach a kernel-side classic-BPF

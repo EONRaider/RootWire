@@ -1,7 +1,11 @@
+import contextlib
 import ctypes
+import os
 import shutil
 import signal
+import socket as socket_module
 import struct
+import threading
 from typing import ClassVar
 
 import pytest
@@ -23,8 +27,12 @@ class TestCLI:
 
     def test_interface_and_data_flags(self):
         args = build_parser().parse_args(["-i", "eth0", "-d"])
-        assert args.interface == "eth0"
+        assert args.interface == ["eth0"]
         assert args.data is True
+
+    def test_interface_is_repeatable(self):
+        args = build_parser().parse_args(["-i", "eth0", "-i", "wlan0"])
+        assert args.interface == ["eth0", "wlan0"]
 
     def test_version(self, capsys):
         with pytest.raises(SystemExit) as excinfo:
@@ -33,34 +41,36 @@ class TestCLI:
         assert __version__ in capsys.readouterr().out
 
 
-class _RecordingSocket:
-    """Fake capture socket that resolves every attached filter program
-    back to its instructions and ends the capture loop on its first
-    recvmsg() -- no real frame is needed to test that the filter was
-    plumbed through correctly.
+class _FakeSocket:
+    """Fake capture socket for driving cli.main() end to end through the
+    real asyncio event loop.
 
-    A ``sock_fprog``'s ``filter`` field is a raw pointer, valid only
-    for as long as the ``FilterProgram`` that built it is alive --
-    which is exactly the duration of this call, since ``capture()``'s
-    generator frame still holds it. So the pointer is dereferenced
-    right here, synchronously, into a plain tuple that safely outlives
-    the call, rather than keeping the raw ``sock_fprog`` bytes (whose
-    embedded pointer is meaningless once the buffer is freed, and
-    differs across otherwise-identical ``FilterProgram`` instances
-    regardless).
+    Backed by one half of a real ``socketpair()`` so ``add_reader`` has
+    a genuine fd to poll; nothing is ever pushed through it unless a
+    test calls ``push_error``, so the fd simply never becomes readable
+    on its own. Every ``SO_ATTACH_FILTER`` call has its ``sock_fprog``
+    pointer resolved back to plain instructions immediately —
+    synchronously, while the originating ``FilterProgram`` is still
+    alive on ``capture_async``'s frame — since the raw pointer bytes
+    themselves are meaningless once that buffer is gone and differ
+    across otherwise-identical ``FilterProgram`` instances regardless.
     """
 
     attached_programs: ClassVar[list[tuple[SockFilter, ...]]] = []
 
     def __init__(self, *args: int) -> None:
-        pass
+        self.setsockopt_calls: list[tuple[int, int, int | bytes]] = []
+        self._real, self._peer = socket_module.socketpair()
+        self._real.setblocking(False)
+        self._pending: list[OSError] = []
 
     def setsockopt(self, level: int, optname: int, value: int | bytes) -> None:
+        self.setsockopt_calls.append((level, optname, value))
         if optname == capture_mod.SO_ATTACH_FILTER:
             assert isinstance(value, bytes)
             fprog = _SockFprog.from_buffer_copy(value)
             raw = ctypes.string_at(fprog.filter, fprog.len * _INSTRUCTION.size)
-            _RecordingSocket.attached_programs.append(
+            _FakeSocket.attached_programs.append(
                 tuple(
                     _INSTRUCTION.unpack_from(raw, i * _INSTRUCTION.size)
                     for i in range(fprog.len)
@@ -70,15 +80,32 @@ class _RecordingSocket:
     def bind(self, address: tuple[str, int]) -> None:
         pass
 
+    def setblocking(self, flag: bool) -> None:
+        pass
+
+    def fileno(self) -> int:
+        return self._real.fileno()
+
     def recvmsg(
         self, bufsize: int, ancbufsize: int
     ) -> tuple[bytes, list, int, None]:
-        raise KeyboardInterrupt
+        with contextlib.suppress(BlockingIOError):
+            self._real.recv(1)
+        raise self._pending.pop(0)
 
-    def __enter__(self) -> "_RecordingSocket":
+    def push_error(self, error: OSError) -> None:
+        self._pending.append(error)
+        self._peer.send(b"x")
+
+    def close(self) -> None:
+        self._real.close()
+        self._peer.close()
+
+    def __enter__(self) -> "_FakeSocket":
         return self
 
     def __exit__(self, *exc: object) -> bool:
+        self.close()
         return False
 
 
@@ -99,12 +126,25 @@ class TestFilterFlag:
         assert excinfo.value.code == 2
 
     def test_filter_is_attached_to_the_capture_socket(self, monkeypatch):
-        _RecordingSocket.attached_programs = []
-        monkeypatch.setattr(capture_mod, "socket", _RecordingSocket)
+        _FakeSocket.attached_programs = []
+        created: list[_FakeSocket] = []
 
-        assert cli.main(["-i", "eth0", "--filter", "tcp"]) == 0
+        def factory(*args: int) -> _FakeSocket:
+            sock = _FakeSocket(*args)
+            created.append(sock)
+            return sock
 
-        assert _RecordingSocket.attached_programs == [CANNED_FILTERS["tcp"]]
+        monkeypatch.setattr(capture_mod, "socket", factory)
+
+        def push_error_once_ready() -> None:
+            created[0].push_error(OSError("stop after setup"))
+
+        threading.Timer(0.05, push_error_once_ready).start()
+
+        with pytest.raises(OSError, match="stop after setup"):
+            cli.main(["-i", "eth0", "--filter", "tcp"])
+
+        assert _FakeSocket.attached_programs == [CANNED_FILTERS["tcp"]]
 
 
 class TestSameFileGuard:
@@ -157,49 +197,18 @@ class TestWriteErrorHandling:
         assert "[=]" not in capsys.readouterr().err
 
 
-class _SignalDeliveringSocket:
-    """Fake capture socket whose recvmsg() simulates real SIGTERM
-    delivery by invoking whatever handler main() currently has
-    installed for it (fetched dynamically via signal.getsignal),
-    instead of blocking.
-
-    This exercises the exact function main() registers and the exact
-    exception-propagation path a live interruption would take — through
-    capture()'s generator, out of recvmsg(), through run()'s loop —
-    without sending a real signal to the test process.
-    """
-
-    def __init__(self, *args: int) -> None:
-        pass
-
-    def setsockopt(self, level: int, optname: int, value: int) -> None:
-        pass
-
-    def bind(self, address: tuple[str, int]) -> None:
-        pass
-
-    def recvmsg(
-        self, bufsize: int, ancbufsize: int
-    ) -> tuple[bytes, list, int, None]:
-        handler = signal.getsignal(signal.SIGTERM)
-        if not callable(handler):
-            raise AssertionError(
-                "main() did not install a callable SIGTERM handler"
-            )
-        handler(signal.SIGTERM, None)
-        raise AssertionError("SIGTERM handler returned instead of raising")
-
-    def __enter__(self) -> "_SignalDeliveringSocket":
-        return self
-
-    def __exit__(self, *exc: object) -> bool:
-        return False
-
-
 class TestAbortHandling:
     """Ctrl-C (KeyboardInterrupt) and a service manager's SIGTERM both
     abort main()'s capture loop through the same shutdown path: flush
-    outputs, report stats, exit 0."""
+    outputs, report stats, exit 0.
+
+    Real OS signals are sent from a background thread here, rather than
+    invoking a handler function directly: asyncio's add_signal_handler
+    is dispatched through an internal self-pipe, not a plain Python
+    signal.signal() callback, so a real signal is both the simplest and
+    the most faithful way to exercise it -- it is also exactly how a
+    service manager or Ctrl-C would actually reach this process.
+    """
 
     def test_keyboard_interrupt_flushes_and_reports_then_exits_cleanly(
         self, capsys, monkeypatch
@@ -213,35 +222,43 @@ class TestAbortHandling:
         assert "[!] Capture aborted." in err
         assert "frames/s" in err  # stats were reported: outputs flushed
 
+    def _send_sigterm_shortly(self) -> None:
+        threading.Timer(
+            0.05, os.kill, args=(os.getpid(), signal.SIGTERM)
+        ).start()
+
     def test_sigterm_flushes_and_reports_then_exits_cleanly(
         self, capsys, monkeypatch
     ):
-        monkeypatch.setattr(
-            capture_mod, "socket", lambda *args: _SignalDeliveringSocket()
-        )
+        monkeypatch.setattr(capture_mod, "socket", _FakeSocket)
+        self._send_sigterm_shortly()
+
         assert cli.main(["-i", "eth0"]) == 0
+
         err = capsys.readouterr().err
         assert "[!] Terminated." in err
         assert "[!] Capture aborted." not in err
         assert "frames/s" in err  # stats were reported: outputs flushed
 
     def test_sigterm_handler_is_restored_after_main_returns(self, monkeypatch):
-        monkeypatch.setattr(
-            capture_mod, "socket", lambda *args: _SignalDeliveringSocket()
-        )
+        monkeypatch.setattr(capture_mod, "socket", _FakeSocket)
         original_handler = signal.getsignal(signal.SIGTERM)
+        self._send_sigterm_shortly()
+
         cli.main(["-i", "eth0"])
+
         assert signal.getsignal(signal.SIGTERM) is original_handler
 
     def test_sigterm_still_flushes_a_pcap_writer(self, monkeypatch, tmp_path):
-        monkeypatch.setattr(
-            capture_mod, "socket", lambda *args: _SignalDeliveringSocket()
-        )
+        monkeypatch.setattr(capture_mod, "socket", _FakeSocket)
         out = tmp_path / "out.pcap"
+        self._send_sigterm_shortly()
+
         assert cli.main(["-i", "eth0", "-w", str(out)]) == 0
+
         # PcapWriter's global header is 24 bytes and no frame was ever
-        # captured (the fake socket raises on its first recv). Seeing
-        # exactly 24 bytes on disk proves close() ran and flushed the
-        # writer, rather than the process exiting with the write still
-        # sitting in an unflushed buffer.
+        # captured (SIGTERM lands before the fake socket ever becomes
+        # readable). Seeing exactly 24 bytes on disk proves close() ran
+        # and flushed the writer, rather than the process exiting with
+        # the write still sitting in an unflushed buffer.
         assert out.stat().st_size == 24

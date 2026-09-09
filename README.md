@@ -54,7 +54,8 @@ rootwire [-h] [-i INTERFACE] [-r FILE] [-w FILE]
          [--filter {arp,ip6,tcp,udp}] [--json] [-d] [--version]
 
 options:
-  -i, --interface   interface to capture frames from (default: all interfaces)
+  -i, --interface   interface to capture frames from; repeat to capture on
+                    several interfaces concurrently (default: all interfaces)
   -r, --read FILE   replay frames from a classic pcap file instead of live
                     capture (no privileges required)
   -w, --write FILE  also write every captured frame to a classic pcap file
@@ -72,6 +73,7 @@ ends. Some favorite combinations:
 ```
 sudo rootwire -i eth0 -w session.pcap        # capture and keep the evidence
 sudo rootwire -i eth0 --filter tcp           # drop non-TCP in the kernel
+sudo rootwire -i eth0 -i wlan0               # merge two interfaces into one stream
 rootwire -r session.pcap                     # inspect it later, no root
 rootwire -r session.pcap --json | jq .       # machine-readable analysis
 ```
@@ -104,7 +106,6 @@ uv run pytest
 
 - Compile tcpdump-style filter expressions (`tcp port 80`, `host 1.2.3.4`)
   to BPF; a canned set (`--filter tcp/udp/arp/ip6`) already ships
-- Concurrent multi-interface capture
 - Checksum verification rendering (the library already computes them)
 
 ## Contributing

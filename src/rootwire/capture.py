@@ -8,9 +8,11 @@ testable without root privileges.
 
 from __future__ import annotations
 
+import asyncio
 import struct
 import time
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Callable, Sequence
+from contextlib import ExitStack
 from socket import (
     CMSG_SPACE,
     PF_PACKET,
@@ -22,7 +24,7 @@ from socket import (
 
 from rootwire.bpf import SO_ATTACH_FILTER, SO_LOCK_FILTER, FilterProgram
 
-__all__ = ["BUFFER_SIZE", "capture"]
+__all__ = ["BUFFER_SIZE", "capture_async"]
 
 #: Every EtherType (linux/if_ether.h).
 _ETH_P_ALL = 0x0003
@@ -52,6 +54,9 @@ SCM_TIMESTAMPNS = 35
 _TIMESPEC = struct.Struct("ll")
 _ANCILLARY_BUFSIZE = CMSG_SPACE(16)
 
+#: One live frame, tagged with the interface it arrived on.
+_CapturedFrame = tuple[bytes, int, "str | None"]
+
 
 def _parse_timestamp(ancdata: list[tuple[int, int, bytes]]) -> int | None:
     """Extract a kernel capture timestamp (nanoseconds since epoch) from
@@ -67,45 +72,107 @@ def _parse_timestamp(ancdata: list[tuple[int, int, bytes]]) -> int | None:
     return None
 
 
-def capture(
-    interface: str | None, filter_program: FilterProgram | None = None
-) -> Iterator[tuple[bytes, int]]:
-    """Yield ``(frame, timestamp)`` pairs from a raw socket, forever.
+def _open_socket(
+    interface: str | None, filter_program: FilterProgram | None
+) -> socket:
+    """Build one capture socket: timestamps and an optional filter
+    attached, bound to ``interface`` (or left unbound for "all
+    interfaces"), set non-blocking for use with ``add_reader``."""
+    sock = socket(PF_PACKET, SOCK_RAW, htons(_ETH_P_ALL))
+    sock.setsockopt(SOL_SOCKET, SO_TIMESTAMPNS, 1)
+    if filter_program is not None:
+        sock.setsockopt(SOL_SOCKET, SO_ATTACH_FILTER, filter_program.as_bytes())
+        # Defence in depth: once a filter is attached, nothing on this
+        # socket should ever replace or remove it for the rest of its
+        # lifetime.
+        sock.setsockopt(SOL_SOCKET, SO_LOCK_FILTER, 1)
+    if interface is not None:
+        sock.bind((interface, 0))
+    sock.setblocking(False)
+    return sock
 
-    Each frame is one freshly allocated, immutable ``bytes`` object —
-    never a reused buffer — so frames remain valid for as long as any
-    consumer holds them. ``timestamp`` is nanoseconds since the Unix
-    epoch, taken from the kernel at the moment the frame arrived
-    (``SO_TIMESTAMPNS``) rather than from a userspace clock read after
-    ``recv`` returns — the latter includes scheduler and interpreter
-    latency between arrival and this code running. A missing timestamp
-    ancillary message (some interfaces/paths don't provide one) falls
-    back to :func:`time.time_ns` rather than crashing the loop.
 
-    :param interface: Interface to bind to, or ``None`` to capture on
-        all interfaces.
-    :param filter_program: A compiled cBPF program to attach
-        (``SO_ATTACH_FILTER``) before binding, so non-matching frames
-        are dropped in the kernel and never reach userspace. ``None``
-        captures everything, as before.
-    :raises PermissionError: If the process lacks the privileges for a
-        raw socket (root or ``CAP_NET_RAW``).
+def _make_reader(
+    sock: socket,
+    interface: str | None,
+    queue: asyncio.Queue[_CapturedFrame | OSError],
+) -> Callable[[], None]:
+    """Build the ``add_reader`` callback for one socket.
+
+    Reads one datagram — non-blocking is safe here, the fd was just
+    confirmed readable — and pushes the result onto the shared queue
+    :func:`capture_async` drains, tagged with which interface it came
+    from. A read error is pushed too, rather than raised here, so it
+    surfaces through the async generator's ordinary control flow
+    instead of being silently logged by asyncio's default handler for
+    callback exceptions.
     """
-    with socket(PF_PACKET, SOCK_RAW, htons(_ETH_P_ALL)) as sock:
-        sock.setsockopt(SOL_SOCKET, SO_TIMESTAMPNS, 1)
-        if filter_program is not None:
-            sock.setsockopt(
-                SOL_SOCKET, SO_ATTACH_FILTER, filter_program.as_bytes()
-            )
-            # Defence in depth: once a filter is attached, nothing on
-            # this socket should ever replace or remove it for the
-            # rest of its lifetime.
-            sock.setsockopt(SOL_SOCKET, SO_LOCK_FILTER, 1)
-        if interface is not None:
-            sock.bind((interface, 0))
-        while True:
+
+    def _on_readable() -> None:
+        try:
             data, ancdata, _flags, _addr = sock.recvmsg(
                 BUFFER_SIZE, _ANCILLARY_BUFSIZE
             )
-            timestamp = _parse_timestamp(ancdata)
-            yield data, timestamp if timestamp is not None else time.time_ns()
+        except OSError as error:
+            queue.put_nowait(error)
+            return
+        timestamp = _parse_timestamp(ancdata)
+        queue.put_nowait(
+            (
+                data,
+                timestamp if timestamp is not None else time.time_ns(),
+                interface,
+            )
+        )
+
+    return _on_readable
+
+
+async def capture_async(
+    interfaces: Sequence[str] | None,
+    filter_program: FilterProgram | None = None,
+) -> AsyncIterator[_CapturedFrame]:
+    """Yield ``(frame, timestamp, interface)`` triples, merged from one
+    or more raw sockets, forever.
+
+    ``interfaces`` names one or more interfaces to bind to
+    individually and capture concurrently; ``None`` or empty opens a
+    single unbound socket listening on everything, as before, and
+    tags every frame's interface ``None``. A single-element sequence
+    is the ordinary single-interface case, handled by the same
+    machinery as N > 1 — there is no separate code path to keep in
+    sync, and no meaningful "just one interface" fast path to bypass.
+
+    Each socket is registered with the running event loop
+    (``add_reader``); when any becomes readable, its frame is read and
+    pushed onto a shared queue this generator drains — merging the
+    streams while keeping each frame tagged with the interface it
+    actually arrived on. Frame order across interfaces reflects
+    readiness order (whichever socket the kernel had data for first),
+    not any fixed round-robin.
+
+    :param interfaces: Interfaces to bind to, or ``None``/empty to
+        capture on all interfaces through one unbound socket.
+    :param filter_program: A compiled cBPF program to attach
+        (``SO_ATTACH_FILTER``) to every socket before binding, so
+        non-matching frames are dropped in the kernel and never reach
+        userspace. ``None`` captures everything, as before.
+    :raises PermissionError: If the process lacks the privileges for a
+        raw socket (root or ``CAP_NET_RAW``).
+    """
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[_CapturedFrame | OSError] = asyncio.Queue()
+    names: Sequence[str | None] = interfaces if interfaces else (None,)
+
+    with ExitStack() as stack:
+        for name in names:
+            sock = _open_socket(name, filter_program)
+            stack.enter_context(sock)
+            loop.add_reader(sock.fileno(), _make_reader(sock, name, queue))
+            stack.callback(loop.remove_reader, sock.fileno())
+
+        while True:
+            item = await queue.get()
+            if isinstance(item, OSError):
+                raise item
+            yield item
