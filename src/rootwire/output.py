@@ -109,7 +109,9 @@ class OutputToScreen(Output):
         print(text, file=self._stream)
 
     def update(self, frame: DecodedFrame) -> None:
-        local_time = time.strftime("%H:%M:%S", time.localtime(frame.timestamp))
+        local_time = time.strftime(
+            "%H:%M:%S", time.localtime(frame.timestamp / 1_000_000_000)
+        )
         interface = frame.interface or "all"
         self._print(
             f"[>] Frame #{frame.number} at {local_time} "

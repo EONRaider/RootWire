@@ -24,7 +24,9 @@ SCHEMA_KEYS = {
 def emit(data: bytes) -> dict:
     stream = io.StringIO()
     OutputToNDJSON(stream).update(
-        decode_frame(data, number=7, timestamp=1_787_000_000.5, interface="x")
+        decode_frame(
+            data, number=7, timestamp=1_787_000_000_500_000_000, interface="x"
+        )
     )
     lines = stream.getvalue().splitlines()
     assert len(lines) == 1
@@ -63,7 +65,7 @@ class TestStatsCollector:
         stats = StatsCollector()
         for number, data in enumerate(frames, start=1):
             stats.update(
-                decode_frame(data, number=number, timestamp=0.0, interface=None)
+                decode_frame(data, number=number, timestamp=0, interface=None)
             )
         return stats
 
@@ -81,7 +83,7 @@ class TestStatsCollector:
                     isinstance(frame.layers[-1], IPv6Fragment)
                     and frame.layers[-1].fragment_offset > 0
                 )
-            )(decode_frame(data, number=1, timestamp=0.0, interface=None))
+            )(decode_frame(data, number=1, timestamp=0, interface=None))
         )
         stats = self.collect([arp_frame, udp_frame, mld, fragment_non_first])
         stream = io.StringIO()

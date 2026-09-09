@@ -5,7 +5,7 @@ from rootwire.decoder import decode_frame
 
 
 def decode(data: bytes):
-    return decode_frame(data, number=1, timestamp=0.0, interface="eth0")
+    return decode_frame(data, number=1, timestamp=0, interface="eth0")
 
 
 class TestDecodeFrame:
@@ -95,10 +95,13 @@ class TestDecodeFrame:
 
     def test_metadata_carried_through(self, arp_frame):
         frame = decode_frame(
-            arp_frame, number=42, timestamp=1755772800.5, interface=None
+            arp_frame,
+            number=42,
+            timestamp=1_755_772_800_500_000_000,
+            interface=None,
         )
         assert frame.number == 42
-        assert frame.timestamp == 1755772800.5
+        assert frame.timestamp == 1_755_772_800_500_000_000
         assert frame.interface is None
         assert frame.length == len(arp_frame)
 
@@ -107,7 +110,7 @@ class TestDecodeFrame:
         the frame — the regression the old yield-self decoder had."""
         buffer = bytearray(udp_frame)
         frame = decode_frame(
-            bytes(buffer), number=1, timestamp=0.0, interface=None
+            bytes(buffer), number=1, timestamp=0, interface=None
         )
         payload_before = frame.payload
         udp_before = frame.layer(UDP)

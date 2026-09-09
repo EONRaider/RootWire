@@ -25,17 +25,13 @@ def corpus_ids() -> list[str]:
 @pytest.mark.parametrize("frame", [f for _, _, f in CORPUS], ids=corpus_ids())
 class TestCorpusThroughPipeline:
     def test_decodes_cleanly(self, frame):
-        decoded = decode_frame(
-            frame, number=1, timestamp=0.0, interface="corpus"
-        )
+        decoded = decode_frame(frame, number=1, timestamp=0, interface="corpus")
         assert decoded.layers  # at least Ethernet
         assert decoded.error is None
         assert not decoded.truncated
 
     def test_renders_without_raising(self, frame):
-        decoded = decode_frame(
-            frame, number=1, timestamp=0.0, interface="corpus"
-        )
+        decoded = decode_frame(frame, number=1, timestamp=0, interface="corpus")
         stream = io.StringIO()
         OutputToScreen(display_payload=True, stream=stream).update(decoded)
         assert "Frame #1" in stream.getvalue()
@@ -53,7 +49,7 @@ class TestFragmentRendering:
         saw_non_first = False
         for frame in fragment_frames:
             decoded = decode_frame(
-                frame, number=1, timestamp=0.0, interface="corpus"
+                frame, number=1, timestamp=0, interface="corpus"
             )
             ip = decoded.layer(IPv4)
             assert ip is not None

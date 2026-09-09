@@ -99,7 +99,7 @@ uv run pytest
 ## Roadmap
 
 - BPF filtering (kernel-side capture filters)
-- Kernel timestamps (`SO_TIMESTAMPNS`) and SIGTERM-clean service use
+- Concurrent multi-interface capture
 - Checksum verification rendering (the library already computes them)
 
 ## Contributing

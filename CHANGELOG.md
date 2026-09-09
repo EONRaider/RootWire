@@ -6,6 +6,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING:** Capture timestamps are now kernel-sourced nanoseconds
+  end-to-end instead of a userspace `time.time()` reading. Live capture
+  enables `SO_TIMESTAMPNS` and reads the kernel's own arrival timestamp
+  via `recvmsg`'s ancillary data instead of a `time.time()` call after
+  `recv` returns, which included scheduler and interpreter latency
+  between the frame's arrival and Python observing it. `DecodedFrame.timestamp`
+  is now an `int` (nanoseconds since epoch), not a `float` (seconds).
+  This changes two on-the-wire contracts: the NDJSON `timestamp` field
+  is now an integer nanosecond value rather than a float epoch-seconds
+  value, and `-w` now writes nanosecond-precision classic pcap files
+  (magic `0xA1B23C4D`) instead of microsecond-precision (`0xA1B2C3D4`)
+  — a long-established pcap variant every major tool (Wireshark,
+  tcpdump, tshark) already reads, and the only way the improved
+  capture precision survives to disk. Replay (`-r`) still reads both
+  precisions losslessly (#59).
+
 ### Added
 - Diagnose IPv4 frames whose `total_length` is smaller than the header
   itself — a length field that cannot be correct. The frame is flagged

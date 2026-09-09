@@ -10,7 +10,7 @@ from rootwire.output import OutputToScreen
 def render(data: bytes, *, display_payload: bool = False) -> str:
     stream = io.StringIO()
     output = OutputToScreen(display_payload=display_payload, stream=stream)
-    output.update(decode_frame(data, number=1, timestamp=0.0, interface="eth0"))
+    output.update(decode_frame(data, number=1, timestamp=0, interface="eth0"))
     return stream.getvalue()
 
 

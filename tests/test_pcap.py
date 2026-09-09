@@ -15,7 +15,11 @@ FRAMES = [
     b"\xff" * 6 + b"\x00" * 6 + b"\x08\x06" + b"arp-ish",
     b"\x00" * 14,
 ]
-TIMESTAMPS = [1_787_000_000.123456, 1_787_000_000.999999]
+#: Full nanosecond precision (not just microsecond-aligned), so the
+#: golden tests below actually exercise the precision SO_TIMESTAMPNS
+#: provides rather than a value that would look the same at either
+#: resolution.
+TIMESTAMPS = [1_787_000_000_123_456_789, 1_787_000_000_999_999_999]
 
 
 class TestWriterFormat:
@@ -23,10 +27,10 @@ class TestWriterFormat:
         path = tmp_path / "empty.pcap"
         PcapWriter(path).close()
         assert path.read_bytes() == struct.pack(
-            "<IHHiIII", 0xA1B2C3D4, 2, 4, 0, 0, 65_550, 1
+            "<IHHiIII", 0xA1B23C4D, 2, 4, 0, 0, 65_550, 1
         )
 
-    def test_record_headers_carry_exact_microseconds(self, tmp_path):
+    def test_record_headers_carry_exact_nanoseconds(self, tmp_path):
         path = tmp_path / "two.pcap"
         with PcapWriter(path) as writer:
             for frame, timestamp in zip(FRAMES, TIMESTAMPS, strict=True):
@@ -35,22 +39,24 @@ class TestWriterFormat:
         cursor = 24
         seen = []
         for frame in FRAMES:
-            ts_sec, ts_usec, incl_len, orig_len = struct.unpack_from(
+            ts_sec, ts_nsec, incl_len, orig_len = struct.unpack_from(
                 "<IIII", data, cursor
             )
             assert incl_len == orig_len == len(frame)
-            seen.append((ts_sec, ts_usec))
+            seen.append((ts_sec, ts_nsec))
             cursor += 16 + incl_len
-        # Integer comparison: float µs at 2026 epoch values is lossy.
-        assert seen[0] == (1_787_000_000, 123456)
-        assert seen[1] == (1_787_000_000, 999999)
+        assert seen[0] == (1_787_000_000, 123_456_789)
+        assert seen[1] == (1_787_000_000, 999_999_999)
 
-    def test_microsecond_rounding_carries_into_the_next_second(self, tmp_path):
-        path = tmp_path / "carry.pcap"
+    def test_exact_nanosecond_at_a_second_boundary(self, tmp_path):
+        """Integer arithmetic (divmod), not float rounding, drives the
+        split -- there is no carry edge case left to get wrong at a
+        second boundary."""
+        path = tmp_path / "boundary.pcap"
         with PcapWriter(path) as writer:
-            writer.write(b"x" * 14, 1_787_000_000.9999999)
-        ts_sec, ts_usec = struct.unpack_from("<II", path.read_bytes(), 24)
-        assert (ts_sec, ts_usec) == (1_787_000_001, 0)
+            writer.write(b"x" * 14, 1_787_000_001_000_000_000)
+        ts_sec, ts_nsec = struct.unpack_from("<II", path.read_bytes(), 24)
+        assert (ts_sec, ts_nsec) == (1_787_000_001, 0)
 
 
 class TestReader:
@@ -63,9 +69,17 @@ class TestReader:
         assert [frame for frame, _ in replayed] == FRAMES
 
     def test_big_endian_and_nanosecond_magic(self, tmp_path):
-        for magic, divisor, name in (
-            (0xA1B2C3D4, 1_000_000, "be-us"),
-            (0xA1B23C4D, 1_000_000_000, "be-ns"),
+        for magic, frac, name in (
+            (
+                0xA1B2C3D4,
+                500_000,
+                "be-us",
+            ),  # microsecond precision: half a second
+            (
+                0xA1B23C4D,
+                500_000_000,
+                "be-ns",
+            ),  # nanosecond precision: half a second
         ):
             path = tmp_path / f"{name}.pcap"
             frame = FRAMES[0]
@@ -74,7 +88,7 @@ class TestReader:
                 + struct.pack(
                     ">IIII",
                     1_787_000_000,
-                    divisor // 2,
+                    frac,
                     len(frame),
                     len(frame),
                 )
@@ -82,7 +96,10 @@ class TestReader:
             )
             ((replayed, timestamp),) = list(read_pcap(path))
             assert replayed == frame
-            assert timestamp == pytest.approx(1_787_000_000.5)
+            # Both encodings of "half a second past" convert to the same
+            # exact integer nanosecond value -- proving the µs->ns and
+            # ns->ns read paths are both exact, not just close.
+            assert timestamp == 1_787_000_000_500_000_000
 
     def test_non_ethernet_linktype_rejected(self, tmp_path):
         path = tmp_path / "raw-ip.pcap"
