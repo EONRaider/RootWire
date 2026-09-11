@@ -26,8 +26,9 @@ Beyond what you'd put in an ordinary bug report, include:
   mis-captures traffic, unbounded memory growth, or something that
   reaches further than the frame it came from.
 - Whether it needs live capture (privileged) or reproduces through `-r`
-  replay of a file (unprivileged) — reaching it the first way is more
-  severe.
+  replay of a file (unprivileged) — note it either way, since the
+  privilege level in play when the bug triggers feeds into severity
+  alongside impact and exploitability.
 
 This is a solo-maintained project with no dedicated security team and no
 contractual SLA. Based on current maintenance activity, expect an
