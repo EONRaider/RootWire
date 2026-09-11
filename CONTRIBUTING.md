@@ -3,6 +3,9 @@
 When contributing to this repository, please first discuss the change you wish to make via issue,
 email, or any other method with the owners of this repository before making a change.
 
+Found a security vulnerability instead of a change to propose? See
+[SECURITY.md](SECURITY.md) — don't open a public issue for it.
+
 ## Development setup
 
 RootWire is developed with [uv](https://docs.astral.sh/uv/). Clone the
