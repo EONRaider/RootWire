@@ -2,7 +2,10 @@
 
 Repository: EONRaider/NETProtocols. Roadmap #170; Tier 3 epic #173 (target 2.6.0).
 Written 2026-10-25 by the orchestrating Claude Code session. Every branch below
-is pushed to `origin`, so this state survives the container being reclaimed.
+is pushed to `origin` (verified with `git ls-remote`), so this state survives the
+container being reclaimed. Branches of already-merged PRs (`claude/vrrp`, `rip`,
+`ospf`, `pim`, `bgp`, `mpls`, `release-2.5.0`) were deleted on GitHub after merge.
+All of their commits are in `origin/master`.
 
 ## Standing instructions from the owner
 
@@ -31,7 +34,7 @@ Push `v2.4.0` before `v2.5.0`.
 |---|---|---|---|---|
 | #187 MPLS | `claude/mpls` | — | ✅ merged as #252 (`ca73b1a`) | — |
 | #186 LLDP | `claude/lldp` | `adc9573` | PR #253 open (master merged in; CLAIMS re-derived) | merge on green |
-| #188 LLC/802.3 | `claude/llc` | `8dfe2c4` (+ doc-fix commit in progress) | code and tests approved; three doc sentences being fixed | independent re-review of the doc fix → merge master → re-derive CLAIMS → PR → merge |
+| #188 LLC/802.3 | `claude/llc` | `0d29253` | code and tests approved; doc-fix commit `0d29253` (three CHANGELOG/MANIFEST sentences plus nits) awaiting its independent re-review | independent re-review of the doc fix → merge master → re-derive CLAIMS → PR → merge |
 | #189 STP | `claude/stp` | `fcea600` | **on hold**: implemented, ladder green, NOT reviewed | independent review → fixes → merge master (after #188) → PR |
 | #190 CDP | `claude/cdp` | `a13e7ad` | **on hold**: implemented, ladder green, mutation gate passed, NOT reviewed | independent review → fixes → merge master (after #188) → PR → mutation.yml (touches checksum.py) |
 
