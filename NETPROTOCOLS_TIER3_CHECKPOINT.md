@@ -34,7 +34,7 @@ Push `v2.4.0` before `v2.5.0`.
 |---|---|---|---|---|
 | #187 MPLS | `claude/mpls` | — | ✅ merged as #252 (`ca73b1a`) | — |
 | #186 LLDP | `claude/lldp` | — | ✅ merged as #253 (`5a6eb7a`) | — |
-| #188 LLC/802.3 | `claude/llc` | `0d29253` | code and tests approved; doc-fix commit `0d29253` (three CHANGELOG/MANIFEST sentences plus nits) awaiting its independent re-review | independent re-review of the doc fix → merge master → re-derive CLAIMS → PR → merge |
+| #188 LLC/802.3 | `claude/llc` | `0d29253` | doc fix reviewed. The review found the `ethertype` low-key refusal breaks RFC 1701 GRE types (0x0004 SNA, 0x00FE OSI, 0x0200 PUP); **owner decided: accept low `ethertype` keys again** (keep `llc.dsap`/`llc.snap` ranges). Fix in progress. | independent review of that fix → push → merge master → re-derive CLAIMS → PR → merge |
 | #189 STP | `claude/stp` | `fcea600` | **on hold**: implemented, ladder green, NOT reviewed | independent review → fixes → merge master (after #188) → PR |
 | #190 CDP | `claude/cdp` | `a13e7ad` | **on hold**: implemented, ladder green, mutation gate passed, NOT reviewed | independent review → fixes → merge master (after #188) → PR → mutation.yml (touches checksum.py) |
 
@@ -57,9 +57,10 @@ Push `v2.4.0` before `v2.5.0`.
 
 ## Decisions taken that the owner may want to revisit
 
-1. The `ethertype` table refuses keys outside 0x0600–0xFFFF (`InvalidRegistryKeyError`,
-   #188). On 2.5.0, registering a low key was the only way to decode STP. The refusal
-   is declared as a behaviour change in CHANGELOG.
+1. ~~The `ethertype` table refuses keys outside 0x0600–0xFFFF.~~ Reversed by the owner:
+   `ethertype` accepts any key again, because GRE and SNAP still consult it and RFC 1701
+   assigns GRE types below 0x0600. Only the new `llc.dsap`/`llc.snap` tables have key
+   ranges. Ethernet and VLAN still dispatch type/length ≤ 1500 to LLC (inherent to #188).
 2. README "Why" decode claim (2.5.0): dpkt is 1.3× faster on the 265-frame corpus.
    The cause is the workload, not a regression. Follow-up: #250.
 3. Benchmark baseline re-recorded at 2.5.0 on 265 frames (normalized 5.4344).
