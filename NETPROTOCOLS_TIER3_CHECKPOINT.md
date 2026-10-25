@@ -34,12 +34,15 @@ Push `v2.4.0` before `v2.5.0`.
 |---|---|---|---|---|
 | #187 MPLS | `claude/mpls` | — | ✅ merged as #252 (`ca73b1a`) | — |
 | #186 LLDP | `claude/lldp` | — | ✅ merged as #253 (`5a6eb7a`) | — |
-| #188 LLC/802.3 | `claude/llc` | `0d29253` | doc fix reviewed. The review found the `ethertype` low-key refusal breaks RFC 1701 GRE types (0x0004 SNA, 0x00FE OSI, 0x0200 PUP); **owner decided: accept low `ethertype` keys again** (keep `llc.dsap`/`llc.snap` ranges). Fix in progress. | independent review of that fix → push → merge master → re-derive CLAIMS → PR → merge |
+| #188 LLC/802.3 | `claude/llc` | `5571ead` | **on hold.** Code and tests approved earlier; doc fix `0d29253` reviewed. Then, per the owner's decision, `5571ead` makes `ethertype` accept any key again (only `llc.dsap`/`llc.snap` keep ranges), fixes the docs and adds a GRE 0x00FE end-to-end test. Ladder green (4938 passed). **`5571ead` is NOT yet independently reviewed.** | independent review of `5571ead` → fixes if any → merge master (now has MPLS #252 + LLDP #253) → re-derive CLAIMS → PR → merge |
 | #189 STP | `claude/stp` | `fcea600` | **on hold**: implemented, ladder green, NOT reviewed | independent review → fixes → merge master (after #188) → PR |
 | #190 CDP | `claude/cdp` | `a13e7ad` | **on hold**: implemented, ladder green, mutation gate passed, NOT reviewed | independent review → fixes → merge master (after #188) → PR → mutation.yml (touches checksum.py) |
 
 `claude/stp` and `claude/cdp` are built on `claude/llc` at `8dfe2c4`. They contain
-#188's commits and must not be merged before #188.
+#188's commits and must not be merged before #188. They predate `0d29253` and `5571ead`, so they still carry the old refusal text and tests.
+When merging `claude/llc` into them, expect conflicts in: the CHANGELOG "Behaviour change" entry,
+`TestKeyRanges` in tests/test_registry.py (the old refusal test will fail), ARCHITECTURE's
+"0x0600-0xFFFF only" row, and walk.py's `:raises:` example.
 
 ## Known integration notes for the held branches
 
@@ -71,8 +74,12 @@ Push `v2.4.0` before `v2.5.0`.
 #235, #236, #237, #238, #239, #241 (docstring standard, deferred), #242, #244,
 #250, #251. #197 closes the roadmap.
 
-## Working files (ephemeral; regenerable)
+## Working files
 
-The shared agent briefs were in the session scratchpad (`tier3-brief.md`,
-`tier3-review-brief.md`). They are not needed to resume. The process is above,
-and the repo's CONTRIBUTING/ARCHITECTURE/steward skill hold the rules.
+The shared agent briefs are saved next to this file in `netprotocols-tier3/`:
+`implementer-brief.md` (hard rules, lessons from Tier 1/2 review, ladder, commit trailers)
+and `review-brief.md` (the independent-review checklist). One correction to the implementer
+brief: lesson 5's checksum-only mutmut command can't pass the survivor gate, so run CI's
+full filter set from `.github/workflows/mutation.yml` instead.
+
+Current mode after this checkpoint: **everything on hold** until the owner resumes.
