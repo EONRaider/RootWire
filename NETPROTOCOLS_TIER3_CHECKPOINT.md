@@ -33,7 +33,7 @@ Push `v2.4.0` before `v2.5.0`.
 | Issue | Branch (on origin) | Head | State | Next step |
 |---|---|---|---|---|
 | #187 MPLS | `claude/mpls` | — | ✅ merged as #252 (`ca73b1a`) | — |
-| #186 LLDP | `claude/lldp` | `adc9573` | PR #253 open (master merged in; CLAIMS re-derived) | merge on green |
+| #186 LLDP | `claude/lldp` | — | ✅ merged as #253 (`5a6eb7a`) | — |
 | #188 LLC/802.3 | `claude/llc` | `0d29253` | code and tests approved; doc-fix commit `0d29253` (three CHANGELOG/MANIFEST sentences plus nits) awaiting its independent re-review | independent re-review of the doc fix → merge master → re-derive CLAIMS → PR → merge |
 | #189 STP | `claude/stp` | `fcea600` | **on hold**: implemented, ladder green, NOT reviewed | independent review → fixes → merge master (after #188) → PR |
 | #190 CDP | `claude/cdp` | `a13e7ad` | **on hold**: implemented, ladder green, mutation gate passed, NOT reviewed | independent review → fixes → merge master (after #188) → PR → mutation.yml (touches checksum.py) |
