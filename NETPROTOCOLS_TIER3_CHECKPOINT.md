@@ -36,7 +36,7 @@ Push `v2.4.0` before `v2.5.0`.
 | #186 LLDP | `claude/lldp` | — | ✅ merged as #253 (`5a6eb7a`) | — |
 | #188 LLC/802.3 | `claude/llc` | — | ✅ merged as #254 (`aa4ac6a`) | — |
 | #189 STP | `claude/stp` | `b9d798a` | `claude/llc` 5571ead merged in (ladder green, 5055 passed); independent review in progress | fixes if any → merge origin/master (`aa4ac6a`, #188 landed) → PR |
-| #190 CDP | `claude/cdp` | `020e8e2` | `claude/llc` 5571ead merged in (ladder green, 5140 passed); independent review in progress | fixes if any → merge origin/master after STP lands → PR → mutation.yml (touches checksum.py) |
+| #190 CDP | `claude/cdp` | `020e8e2` | `claude/llc` 5571ead merged in (ladder green, 5140 passed). Review: changes needed — blocking: a TLV Length < 4 inside the PDU silently stops the walk (verify() can pass); also CDPAddress.ip length pins, TLV-name table pin, rationale/Wireshark wording nits. Independent fixer running (local commits only) | re-review fix → merge origin/master after STP lands → PR → mutation.yml (touches checksum.py) |
 
 `claude/stp` and `claude/cdp` are built on `claude/llc` and already include its final
 commits (`5571ead`), so merging `origin/master` into them should conflict only where
