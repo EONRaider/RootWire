@@ -38,11 +38,9 @@ Push `v2.4.0` before `v2.5.0`.
 | #189 STP | `claude/stp` | `b9d798a` | `claude/llc` 5571ead merged in (ladder green, 5055 passed); independent review in progress | fixes if any → merge origin/master (`aa4ac6a`, #188 landed) → PR |
 | #190 CDP | `claude/cdp` | `020e8e2` | `claude/llc` 5571ead merged in (ladder green, 5140 passed); independent review in progress | fixes if any → merge origin/master after STP lands → PR → mutation.yml (touches checksum.py) |
 
-`claude/stp` and `claude/cdp` are built on `claude/llc` at `8dfe2c4`. They contain
-#188's commits and must not be merged before #188. They predate `0d29253` and `5571ead`, so they still carry the old refusal text and tests.
-When merging `claude/llc` into them, expect conflicts in: the CHANGELOG "Behaviour change" entry,
-`TestKeyRanges` in tests/test_registry.py (the old refusal test will fail), ARCHITECTURE's
-"0x0600-0xFFFF only" row, and walk.py's `:raises:` example.
+`claude/stp` and `claude/cdp` are built on `claude/llc` and already include its final
+commits (`5571ead`), so merging `origin/master` into them should conflict only where
+they edit text that the MPLS/LLDP merge also touched (CHANGELOG, CLAIMS, MANIFEST counts).
 
 ## Known integration notes for the held branches
 
