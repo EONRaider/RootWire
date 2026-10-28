@@ -94,9 +94,9 @@ Current mode: **Tier 3 complete (2026-10-28).** #173's table is all ✅ and left
 ## 2.6.0 release (in progress, 2026-10-28)
 
 - Follow-up filed: #257 (SCTP zero-tail scan copies the tail for `bytes` input).
-- A release agent is preparing branch `claude/release-2.6.0` (worktree
-  /home/user/wt/release-2.6.0, from `c008e18`) modelled on #249: version bump, CHANGELOG
-  `[2.6.0] - 2026-10-28`, Rule 4 re-measurement into a CLAIMS "Re-measured for 2.6.0"
-  section, README numbers, and the benchmark baseline if the 293-frame corpus requires it.
-  Local commits only until an independent review approves; then PR, merge on green,
-  and hand the owner `netprotocols-tier3/tagging-prompt.md` extended with v2.6.0.
+- Branch `claude/release-2.6.0` pushed at `65170bf` (1898a5d `chore(release): 2.6.0`,
+  65170bf baseline re-record 5.4344 → 4.9727 on 293 frames). Headline: dpkt decodes 1.33×
+  faster (the old "within 10% on 2.4.0's 140 frames" no longer holds: 1.14×), scapy 3.4×
+  slower, encode 4.66×, import 89.8 ms vs scapy 436.2 ms, wheel 220.5 KiB (12.2×), depth 94/293.
+  Raw logs: scratchpad/release-2.6.0/. Independent review running; then PR, merge on green,
+  then extend `netprotocols-tier3/tagging-prompt.md` with v2.6.0 at its merge SHA and hand it over.
