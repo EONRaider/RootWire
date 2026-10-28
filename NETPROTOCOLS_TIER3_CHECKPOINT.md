@@ -23,9 +23,9 @@ All of their commits are in `origin/master`.
 
 | Version | Merge commit | Tag |
 |---|---|---|
-| 2.4.0 | `0a33a5d` | not pushed yet (owner) |
-| 2.5.0 | `7549dc0` | not pushed yet (owner) |
-| 2.6.0 | `0566f88` | not pushed yet (owner) |
+| 2.4.0 | `0a33a5d` | ✅ v2.4.0 pushed; PyPI + GitHub release (run 40731807110) |
+| 2.5.0 | `7549dc0` | ✅ v2.5.0 pushed; PyPI + GitHub release (run 40732111771) |
+| 2.6.0 | `0566f88` | ✅ v2.6.0 pushed; PyPI + GitHub release, Latest (run 40732464915) |
 
 Push `v2.4.0`, then `v2.5.0`, then `v2.6.0`, each after the previous Release run finishes
 (`netprotocols-tier3/tagging-prompt.md`, handed to the owner 2026-10-28).
@@ -91,7 +91,7 @@ full filter set from `.github/workflows/mutation.yml` instead.
 pushes v2.4.0, v2.5.0 and v2.6.0, in that order. It was handed to the owner on 2026-10-28,
 after 2.6.0 merged.
 
-Current mode: **Tier 3 complete and 2.6.0 merged (2026-10-28).** #173 is all ✅ and left open for the owner to close. Waiting on the owner to push v2.4.0, v2.5.0, v2.6.0. Open follow-ups: #235–#239, #241, #242, #244, #250, #251, #257; #197 closes the roadmap.
+Current mode: **handed off (2026-10-28).** All three releases are tagged and published (verified). Housekeeping done: #171 and #173 closed with release links, #172 release note, #170 tier table has a Status column, #250 has 2.6.0 data, #197 has a progress check. The local continuation prompt is `netprotocols-tier3/handoff-prompt.md`.
 
 ## 2.6.0 release (done, 2026-10-28)
 
