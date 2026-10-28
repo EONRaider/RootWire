@@ -25,8 +25,10 @@ All of their commits are in `origin/master`.
 |---|---|---|
 | 2.4.0 | `0a33a5d` | not pushed yet (owner) |
 | 2.5.0 | `7549dc0` | not pushed yet (owner) |
+| 2.6.0 | `0566f88` | not pushed yet (owner) |
 
-Push `v2.4.0` before `v2.5.0`.
+Push `v2.4.0`, then `v2.5.0`, then `v2.6.0`, each after the previous Release run finishes
+(`netprotocols-tier3/tagging-prompt.md`, handed to the owner 2026-10-28).
 
 ## Tier 3 status
 
@@ -89,13 +91,11 @@ full filter set from `.github/workflows/mutation.yml` instead.
 pushes the v2.4.0 and v2.5.0 tags. The owner asked to be handed it "when the time is right",
 so hand it over at the next release point (with 2.6.0 added once Tier 3 ships), not now.
 
-Current mode: **Tier 3 complete (2026-10-28).** #173's table is all ✅ and left open for the owner to close, as #172 was. Next: the 2.6.0 release PR (re-measure per CLAIMS Rule 4, modelled on #249), then hand the owner the tagging prompt with v2.6.0 added.
+Current mode: **Tier 3 complete and 2.6.0 merged (2026-10-28).** #173 is all ✅ and left open for the owner to close. Waiting on the owner to push v2.4.0, v2.5.0, v2.6.0. Open follow-ups: #235–#239, #241, #242, #244, #250, #251, #257; #197 closes the roadmap.
 
 ## 2.6.0 release (in progress, 2026-10-28)
 
 - Follow-up filed: #257 (SCTP zero-tail scan copies the tail for `bytes` input).
-- **PR #258** (`chore(release): 2.6.0`), head `9230cd2`: 1898a5d release, b869cfc reverts the
-  baseline re-record (review: CI on ubuntu-latest passed +0.7..+13.5% against 5.4344 on 293 frames;
-  the VM value 4.9727 would have loosened the gate), 9230cd2 CLAIMS corrections. Data posted on #251.
-  fuzz.yml and mutation.yml dispatched on claude/release-2.6.0. Merge when PR CI + both runs are green,
-  then extend `netprotocols-tier3/tagging-prompt.md` with v2.6.0 at the merge SHA and hand it over.
+- ✅ **2.6.0 merged as #258 (`0566f88`)**: PR CI, fuzz.yml (fuzz + atheris) and mutation.yml all green on
+  9230cd2. CodeRabbit's two comments ignored per the owner's rule. Tagging prompt updated with v2.6.0
+  and handed to the owner. Roadmap work for Tier 3 is complete; nothing further is in flight.
