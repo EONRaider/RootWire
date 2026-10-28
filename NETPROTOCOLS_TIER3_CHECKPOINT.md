@@ -34,7 +34,7 @@ Push `v2.4.0` before `v2.5.0`.
 |---|---|---|---|---|
 | #187 MPLS | `claude/mpls` | — | ✅ merged as #252 (`ca73b1a`) | — |
 | #186 LLDP | `claude/lldp` | — | ✅ merged as #253 (`5a6eb7a`) | — |
-| #188 LLC/802.3 | `claude/llc` | `5571ead` | Code and tests approved earlier; doc fix `0d29253` reviewed. Then, per the owner's decision, `5571ead` makes `ethertype` accept any key again (only `llc.dsap`/`llc.snap` keep ranges), fixes the docs and adds a GRE 0x00FE end-to-end test. Ladder green (4938 passed). Independent review of `5571ead` in progress. | independent review of `5571ead` → fixes if any → merge master (now has MPLS #252 + LLDP #253) → re-derive CLAIMS → PR → merge |
+| #188 LLC/802.3 | `claude/llc` | `3b27e10` | PR #254 open: `5571ead` approved, master (MPLS+LLDP) merged in, CLAIMS re-derived (293 frames / 30 scenarios, 34 protocols, 4,641 statements). Ladder green (5314). | merge on green |
 | #189 STP | `claude/stp` | `b9d798a` | `claude/llc` 5571ead merged in (ladder green, 5055 passed); independent review in progress | fixes if any → merge master after #188 lands → PR |
 | #190 CDP | `claude/cdp` | `020e8e2` | `claude/llc` 5571ead merged in (ladder green, 5140 passed); independent review in progress | fixes if any → merge master after #188 lands → PR → mutation.yml (touches checksum.py) |
 
