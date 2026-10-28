@@ -16,8 +16,8 @@ All of their commits are in `origin/master`.
   reviewer finding is implemented by an agent independent of the code's
   author, then reviewed by another independent agent, before it is pushed.
 - Sub-agents make no GitHub writes. The session cannot push tags; the owner does.
-- Current mode: **hold**. Integrate only what is ready or needs small fixes; the rest
-  stays on hold until the owner says otherwise.
+- Mode: the owner resumed work on 2026-10-28 (the earlier "hold" is lifted); see the
+  last line of this file for where things stand.
 
 ## Release state
 
