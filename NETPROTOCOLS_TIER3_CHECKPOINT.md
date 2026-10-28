@@ -36,7 +36,7 @@ Push `v2.4.0` before `v2.5.0`.
 | #186 LLDP | `claude/lldp` | — | ✅ merged as #253 (`5a6eb7a`) | — |
 | #188 LLC/802.3 | `claude/llc` | — | ✅ merged as #254 (`aa4ac6a`) | — |
 | #189 STP | `claude/stp` | — | ✅ merged as #255 (`fd803a6`; CI fix b416e3f: bare cisco.com link 403 in lychee, pickle test flagged by Bandit/CodeFactor) | — |
-| #190 CDP | `claude/cdp` | `dfe1272` | ✅ approved (2 re-review rounds; nits 392508c). origin/master (`fd803a6`, incl. STP) merged in: CLAIMS 36 protocols / 32 round-trip strategies / 5,023 statements. Ladder 5750 passed. **PR #256 open**; mutation.yml dispatched on claude/cdp | merge when PR CI and mutation.yml are green → 2.6.0 release PR → hand over tagging prompt (v2.4.0, v2.5.0, v2.6.0) |
+| #190 CDP | `claude/cdp` | — | ✅ merged as #256 (`c008e18`; mutation.yml green on dfe1272) | — |
 
 `claude/stp` and `claude/cdp` are built on `claude/llc` and already include its final
 commits (`5571ead`), so merging `origin/master` into them should conflict only where
@@ -89,4 +89,4 @@ full filter set from `.github/workflows/mutation.yml` instead.
 pushes the v2.4.0 and v2.5.0 tags. The owner asked to be handed it "when the time is right",
 so hand it over at the next release point (with 2.6.0 added once Tier 3 ships), not now.
 
-Current mode: **resumed 2026-10-28.** Tier 3 work continues (see the status table).
+Current mode: **Tier 3 complete (2026-10-28).** #173's table is all ✅ and left open for the owner to close, as #172 was. Next: the 2.6.0 release PR (re-measure per CLAIMS Rule 4, modelled on #249), then hand the owner the tagging prompt with v2.6.0 added.
