@@ -4,7 +4,7 @@ Repository: EONRaider/NETProtocols. Roadmap #170; Tier 3 epic #173 (target 2.6.0
 Written 2026-10-25 by the orchestrating Claude Code session. Every branch below
 is pushed to `origin` (verified with `git ls-remote`), so this state survives the
 container being reclaimed. Branches of already-merged PRs (`claude/vrrp`, `rip`,
-`ospf`, `pim`, `bgp`, `mpls`, `release-2.5.0`) were deleted on GitHub after merge.
+`ospf`, `pim`, `bgp`, `mpls`, `release-2.5.0`, `llc`) were deleted on GitHub after merge.
 All of their commits are in `origin/master`.
 
 ## Standing instructions from the owner
@@ -34,9 +34,9 @@ Push `v2.4.0` before `v2.5.0`.
 |---|---|---|---|---|
 | #187 MPLS | `claude/mpls` | — | ✅ merged as #252 (`ca73b1a`) | — |
 | #186 LLDP | `claude/lldp` | — | ✅ merged as #253 (`5a6eb7a`) | — |
-| #188 LLC/802.3 | `claude/llc` | `3b27e10` | PR #254 open: `5571ead` approved, master (MPLS+LLDP) merged in, CLAIMS re-derived (293 frames / 30 scenarios, 34 protocols, 4,641 statements). Ladder green (5314). | merge on green |
-| #189 STP | `claude/stp` | `b9d798a` | `claude/llc` 5571ead merged in (ladder green, 5055 passed); independent review in progress | fixes if any → merge master after #188 lands → PR |
-| #190 CDP | `claude/cdp` | `020e8e2` | `claude/llc` 5571ead merged in (ladder green, 5140 passed); independent review in progress | fixes if any → merge master after #188 lands → PR → mutation.yml (touches checksum.py) |
+| #188 LLC/802.3 | `claude/llc` | — | ✅ merged as #254 (`aa4ac6a`) | — |
+| #189 STP | `claude/stp` | `b9d798a` | `claude/llc` 5571ead merged in (ladder green, 5055 passed); independent review in progress | fixes if any → merge origin/master (`aa4ac6a`, #188 landed) → PR |
+| #190 CDP | `claude/cdp` | `020e8e2` | `claude/llc` 5571ead merged in (ladder green, 5140 passed); independent review in progress | fixes if any → merge origin/master after STP lands → PR → mutation.yml (touches checksum.py) |
 
 `claude/stp` and `claude/cdp` are built on `claude/llc` at `8dfe2c4`. They contain
 #188's commits and must not be merged before #188. They predate `0d29253` and `5571ead`, so they still carry the old refusal text and tests.
