@@ -90,3 +90,13 @@ pushes the v2.4.0 and v2.5.0 tags. The owner asked to be handed it "when the tim
 so hand it over at the next release point (with 2.6.0 added once Tier 3 ships), not now.
 
 Current mode: **Tier 3 complete (2026-10-28).** #173's table is all ✅ and left open for the owner to close, as #172 was. Next: the 2.6.0 release PR (re-measure per CLAIMS Rule 4, modelled on #249), then hand the owner the tagging prompt with v2.6.0 added.
+
+## 2.6.0 release (in progress, 2026-10-28)
+
+- Follow-up filed: #257 (SCTP zero-tail scan copies the tail for `bytes` input).
+- A release agent is preparing branch `claude/release-2.6.0` (worktree
+  /home/user/wt/release-2.6.0, from `c008e18`) modelled on #249: version bump, CHANGELOG
+  `[2.6.0] - 2026-10-28`, Rule 4 re-measurement into a CLAIMS "Re-measured for 2.6.0"
+  section, README numbers, and the benchmark baseline if the 293-frame corpus requires it.
+  Local commits only until an independent review approves; then PR, merge on green,
+  and hand the owner `netprotocols-tier3/tagging-prompt.md` extended with v2.6.0.
