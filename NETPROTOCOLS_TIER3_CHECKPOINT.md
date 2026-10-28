@@ -94,9 +94,8 @@ Current mode: **Tier 3 complete (2026-10-28).** #173's table is all ✅ and left
 ## 2.6.0 release (in progress, 2026-10-28)
 
 - Follow-up filed: #257 (SCTP zero-tail scan copies the tail for `bytes` input).
-- Branch `claude/release-2.6.0` pushed at `65170bf` (1898a5d `chore(release): 2.6.0`,
-  65170bf baseline re-record 5.4344 → 4.9727 on 293 frames). Headline: dpkt decodes 1.33×
-  faster (the old "within 10% on 2.4.0's 140 frames" no longer holds: 1.14×), scapy 3.4×
-  slower, encode 4.66×, import 89.8 ms vs scapy 436.2 ms, wheel 220.5 KiB (12.2×), depth 94/293.
-  Raw logs: scratchpad/release-2.6.0/. Independent review running; then PR, merge on green,
-  then extend `netprotocols-tier3/tagging-prompt.md` with v2.6.0 at its merge SHA and hand it over.
+- **PR #258** (`chore(release): 2.6.0`), head `9230cd2`: 1898a5d release, b869cfc reverts the
+  baseline re-record (review: CI on ubuntu-latest passed +0.7..+13.5% against 5.4344 on 293 frames;
+  the VM value 4.9727 would have loosened the gate), 9230cd2 CLAIMS corrections. Data posted on #251.
+  fuzz.yml and mutation.yml dispatched on claude/release-2.6.0. Merge when PR CI + both runs are green,
+  then extend `netprotocols-tier3/tagging-prompt.md` with v2.6.0 at the merge SHA and hand it over.
