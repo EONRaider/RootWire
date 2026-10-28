@@ -77,7 +77,7 @@ they edit text that the MPLS/LLDP merge also touched (CHANGELOG, CLAIMS, MANIFES
 
 #235, #236, #237, #238, #239, #241 (docstring standard, deferred), #242, #244,
 #250, #251. #197 closes the roadmap.
-To file at 2.6.0 time: sctp.py's zero-tail scan `any(raw[cursor:])` (sctp.py ~233, ~247) copies the tail for `bytes` input; CDP now scans through a memoryview (found in the CDP re-review).
+#257 (filed at 2.6.0): sctp.py's zero-tail scan copies the tail for `bytes` input.
 
 ## Working files
 
@@ -88,12 +88,12 @@ brief: lesson 5's checksum-only mutmut command can't pass the survivor gate, so 
 full filter set from `.github/workflows/mutation.yml` instead.
 
 `netprotocols-tier3/tagging-prompt.md` is the prompt for the owner's local session that
-pushes the v2.4.0 and v2.5.0 tags. The owner asked to be handed it "when the time is right",
-so hand it over at the next release point (with 2.6.0 added once Tier 3 ships), not now.
+pushes v2.4.0, v2.5.0 and v2.6.0, in that order. It was handed to the owner on 2026-10-28,
+after 2.6.0 merged.
 
 Current mode: **Tier 3 complete and 2.6.0 merged (2026-10-28).** #173 is all ✅ and left open for the owner to close. Waiting on the owner to push v2.4.0, v2.5.0, v2.6.0. Open follow-ups: #235–#239, #241, #242, #244, #250, #251, #257; #197 closes the roadmap.
 
-## 2.6.0 release (in progress, 2026-10-28)
+## 2.6.0 release (done, 2026-10-28)
 
 - Follow-up filed: #257 (SCTP zero-tail scan copies the tail for `bytes` input).
 - ✅ **2.6.0 merged as #258 (`0566f88`)**: PR CI, fuzz.yml (fuzz + atheris) and mutation.yml all green on
