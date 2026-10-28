@@ -82,4 +82,7 @@ and `review-brief.md` (the independent-review checklist). One correction to the 
 brief: lesson 5's checksum-only mutmut command can't pass the survivor gate, so run CI's
 full filter set from `.github/workflows/mutation.yml` instead.
 
-Current mode after this checkpoint: **everything on hold** until the owner resumes.
+`netprotocols-tier3/tagging-prompt.md` is the prompt for the owner's local session that
+pushes the v2.4.0 and v2.5.0 tags.
+
+Current mode: **resumed 2026-10-28.** Tier 3 work continues (see the status table).
