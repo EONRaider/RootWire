@@ -35,7 +35,7 @@ Push `v2.4.0` before `v2.5.0`.
 | #187 MPLS | `claude/mpls` | — | ✅ merged as #252 (`ca73b1a`) | — |
 | #186 LLDP | `claude/lldp` | — | ✅ merged as #253 (`5a6eb7a`) | — |
 | #188 LLC/802.3 | `claude/llc` | — | ✅ merged as #254 (`aa4ac6a`) | — |
-| #189 STP | `claude/stp` | `b9d798a` | `claude/llc` 5571ead merged in (ladder green, 5055 passed); independent review in progress | fixes if any → merge origin/master (`aa4ac6a`, #188 landed) → PR |
+| #189 STP | `claude/stp` | `b9d798a` | `claude/llc` 5571ead merged in (ladder green, 5055 passed); Review: changes needed — blocking: GARP (Protocol ID 0x0001 at DSAP 0x42) raised in strict walks; should-fix: non-root BPDU accessor tests, PVST+/MST rationale, checker attributions, citations. Independent fixer running (local commits only) | re-review fix → merge origin/master (`aa4ac6a`) → PR |
 | #190 CDP | `claude/cdp` | `020e8e2` | `claude/llc` 5571ead merged in (ladder green, 5140 passed). Review: changes needed — blocking: a TLV Length < 4 inside the PDU silently stops the walk (verify() can pass); also CDPAddress.ip length pins, TLV-name table pin, rationale/Wireshark wording nits. Independent fixer running (local commits only) | re-review fix → merge origin/master after STP lands → PR → mutation.yml (touches checksum.py) |
 
 `claude/stp` and `claude/cdp` are built on `claude/llc` and already include its final
@@ -64,7 +64,11 @@ they edit text that the MPLS/LLDP merge also touched (CHANGELOG, CLAIMS, MANIFES
    ranges. Ethernet and VLAN still dispatch type/length ≤ 1500 to LLC (inherent to #188).
 2. README "Why" decode claim (2.5.0): dpkt is 1.3× faster on the 265-frame corpus.
    The cause is the workload, not a regression. Follow-up: #250.
-3. Benchmark baseline re-recorded at 2.5.0 on 265 frames (normalized 5.4344).
+3. **GARP at DSAP 0x42 (#189), owner decision 2026-10-28:** LLC sniffs the two octets after
+   the Control for DSAP 0x42 (compare=False decode-context field, the BGP/MPLS convention) and
+   dispatches to `llc.dsap` only when they are 0x0000; GARP frames end the walk at LLC. STP.decode
+   still rejects Protocol ID != 0 on a direct decode.
+4. Benchmark baseline re-recorded at 2.5.0 on 265 frames (normalized 5.4344).
    Gate-noise follow-up: #251.
 
 ## Follow-up issues filed during this roadmap
