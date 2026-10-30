@@ -116,5 +116,7 @@ Current mode: **handed off (2026-10-28).** All three releases are tagged and pub
   gate fails with every new mutant surviving.
 - Follow-up filed: **#259** (bug) — `scripts/check_fixtures.py` still uses the wire dst behind a
   Routing header.
-- Coverage comment now: 5084 statements, 1 miss. Master `f4de4ef`.
+- Coverage comment now: 5084 statements, 1 miss.
+- 2026-10-30: Dependabot backlog cleared on the owner's go-ahead: #261 (replaced #217), #218, #221,
+  #222, #219, #220 merged after rebasing onto master, each green. Master `62dabb3`.
 - Next per owner: more follow-ups (#257 small) or Tier 4 (#174); ask the owner.
