@@ -107,8 +107,14 @@ Current mode: **handed off (2026-10-28).** All three releases are tagged and pub
   are in `netprotocols-tier3/local-overrides.md` (they win).
 - Owner decisions 2026-10-30: follow-ups before Tier 4, starting with #236; Tier 4 captures run in a
   privileged Docker container (no host sudo/daemons).
-- **#236 (IPv6 Routing final destination)**, owner decisions: keyword-only `routing=` on
-  `checksum.compute/verify` and `flow.flow_key` (Packet methods pass it automatically);
-  `IPv6Routing.final_destination(dst)` returns None when unresolvable, and the code then falls
-  back to `ip.dst`. Branch `claude/ipv6-routing-final-dst` (local worktree `wt/np-ipv6-routing`):
-  implementer dispatched; review, mutation.yml and PR still to do.
+- **#236 (IPv6 Routing final destination): ✅ merged as #260 (`f4de4ef`), 2026-10-30.** Owner
+  decisions: keyword-only `routing=` on `checksum.compute/verify` and `flow.flow_key` (Packet methods
+  pass the LAST Routing header with segments left); `IPv6Routing.final_destination(dst)` returns None
+  when unresolvable, falling back to `ip.dst`. PR CI, mutation.yml (41141229473) green on b08e70c.
+  Lesson: mutmut only runs the tests in pyproject's `pytest_add_cli_args_test_selection`
+  (test_checksum/tlv/dns/http) — tests for checksum.py must live in tests/test_checksum.py, or the
+  gate fails with every new mutant surviving.
+- Follow-up filed: **#259** (bug) — `scripts/check_fixtures.py` still uses the wire dst behind a
+  Routing header.
+- Coverage comment now: 5084 statements, 1 miss. Master `f4de4ef`.
+- Next per owner: more follow-ups (#257 small) or Tier 4 (#174); ask the owner.
