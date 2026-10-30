@@ -99,3 +99,16 @@ Current mode: **handed off (2026-10-28).** All three releases are tagged and pub
 - ✅ **2.6.0 merged as #258 (`0566f88`)**: PR CI, fuzz.yml (fuzz + atheris) and mutation.yml all green on
   9230cd2. CodeRabbit's two comments ignored per the owner's rule. Tagging prompt updated with v2.6.0
   and handed to the owner. Roadmap work for Tier 3 is complete; nothing further is in flight.
+
+## Local orchestration (from 2026-10-30)
+
+- Orchestration moved to the owner's machine. Clone `/home/eonraider/programming/NETProtocols`;
+  agent worktrees under `/home/eonraider/programming/wt/`. Environment differences from the briefs
+  are in `netprotocols-tier3/local-overrides.md` (they win).
+- Owner decisions 2026-10-30: follow-ups before Tier 4, starting with #236; Tier 4 captures run in a
+  privileged Docker container (no host sudo/daemons).
+- **#236 (IPv6 Routing final destination)**, owner decisions: keyword-only `routing=` on
+  `checksum.compute/verify` and `flow.flow_key` (Packet methods pass it automatically);
+  `IPv6Routing.final_destination(dst)` returns None when unresolvable, and the code then falls
+  back to `ip.dst`. Branch `claude/ipv6-routing-final-dst` (local worktree `wt/np-ipv6-routing`):
+  implementer dispatched; review, mutation.yml and PR still to do.
