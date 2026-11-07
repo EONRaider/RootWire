@@ -140,7 +140,10 @@ def test_esp_over_ip_has_no_conversation() -> None:
     frames in ``esp.pcap`` belongs to a conversation."""
     frames = read_pcap(FIXTURES / "esp.pcap")
     assert frames
-    assert all(_frame_flow_key(decode(data)) is None for data in frames)
+    for data in frames:
+        frame = decode(data)
+        assert isinstance(frame.layers[-1], ESP)
+        assert _frame_flow_key(frame) is None
 
 
 def test_udp_encapsulated_esp_counts_under_its_udp_flow() -> None:
@@ -178,3 +181,12 @@ def test_udp_encapsulated_esp_counts_under_its_udp_flow() -> None:
     assert key is not None
     assert key.protocol == 17
     assert {key.port_a, key.port_b} == {40000, 4500}
+    stats = StatsCollector()
+    stats.update(frame)
+    stream = io.StringIO()
+    stats.report(stream)
+    assert "[=] 1 conversation:\n" in stream.getvalue()
+    assert (
+        f"UDP 10.0.0.1:40000 <-> 10.0.0.2:4500: 1 frame, {len(data)} bytes"
+        in stream.getvalue()
+    )

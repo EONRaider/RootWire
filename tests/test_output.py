@@ -327,6 +327,33 @@ class TestOptionRendering:
         assert line.count("No-Operation") == 16
         assert "(+4 more)" in line
 
+    def test_tcp_options_cap_keeps_the_first_options(self):
+        """Mixed-length options: MSS (4 bytes), 16 No-Operations, Window
+        Scale (3 bytes) and End of Option List. The cap counts parsed
+        options, not bytes, and keeps the earliest: MSS and 15 NOPs are
+        shown, Window Scale is folded into ``(+3 more)``."""
+        options = b"\x02\x04\x05\xb4" + b"\x01" * 16 + b"\x03\x03\x07\x00"
+        tcp = TCP(
+            src_port=1234,
+            dst_port=80,
+            seq=0,
+            ack=0,
+            data_offset=5 + len(options) // 4,
+            reserved=0,
+            flags=0x010,
+            window=1024,
+            checksum=0,
+            urgent_pointer=0,
+            options=options,
+        )
+        ip = _ipv4(protocol=6, total_length=20 + tcp.header_len)
+        text = render(bytes(Packet(_eth(0x0800), ip, tcp)))
+        line = next(ln for ln in text.splitlines() if "Options:" in ln)
+        assert "Options: Maximum Segment Size (1460), No-Operation" in line
+        assert line.count("No-Operation") == 15
+        assert "Window Scale" not in line
+        assert line.endswith("(+3 more)")
+
 
 class TestChecksumVerification:
     def test_valid_udp_checksum_shows_no_mismatch(self):
