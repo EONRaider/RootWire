@@ -94,7 +94,7 @@ bounds, or renders that decoding, belongs there instead.
 ## Supported versions
 
 One supported line: whatever `pyproject.toml` currently declares as
-`version` (`6.0.0` as of this writing) — there's no maintained branch
+`version` (`7.0.0` as of this writing) — there's no maintained branch
 for older majors. `pipx upgrade rootwire` / `uv tool upgrade rootwire`
 gets you current; check that against the latest tag before reporting
 something that might already be fixed.
