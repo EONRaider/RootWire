@@ -110,33 +110,82 @@ def _format_option(option: IPv4Option | TCPOption) -> str:
     return f"{option.kind_name} ({value})"
 
 
-def _trailing_bytes(
-    frame: DecodedFrame, layer: Protocol, *, with_trailer: bool = False
-) -> bytes:
-    """The bytes that followed *layer* on the wire, whether or not
-    anything after it was itself decoded into a further layer —
-    reconstructed from the frame's own raw capture rather than
-    re-serializing subsequent layers, so it is exact regardless of
-    chain depth. Equal to ``frame.payload`` when *layer* is the last
-    decoded layer.
-
-    The frame's :attr:`~rootwire.frame.DecodedFrame.trailer` (Ethernet
-    padding, a captured FCS) is left out unless *with_trailer* is set:
-    a TCP or ICMPv6 checksum sums the segment's length as
-    ``header_len + len(payload)``, so six bytes of padding behind a
-    54-byte bare ACK would otherwise read as a checksum mismatch on
-    perfectly good traffic. GRE is the one caller that wants it, because
-    its checksum input runs to its IP datagram's declared end, which
-    ``compute(..., ip=...)`` applies itself (see
-    :meth:`netprotocols.Packet.with_checksums`).
-    """
-    end = len(frame.raw) - (0 if with_trailer else len(frame.trailer))
-    cursor = 0
-    for candidate in frame.layers:
-        cursor += candidate.header_len
+def _offset_of(frame: DecodedFrame, layer: Protocol) -> tuple[int, int]:
+    """``(index, offset)`` of *layer* in *frame*: its position in
+    ``frame.layers`` and the frame offset its header starts at, the sum
+    of every preceding header's ``header_len``."""
+    offset = 0
+    for index, candidate in enumerate(frame.layers):
         if candidate is layer:
-            return frame.raw[cursor:end]
-    return frame.payload  # pragma: no cover -- layer is always in frame.layers
+            return index, offset
+        offset += candidate.header_len
+    raise ValueError("layer is not in frame.layers")  # pragma: no cover
+
+
+def _declared_end(frame: DecodedFrame, layer: Protocol) -> int:
+    """Where the bytes that belong to *layer* end, by the length fields
+    of the headers that enclose it, *layer* itself included.
+
+    That is the tightest of: each enclosing IPv4 header's Total Length,
+    IPv6 header's Payload Length, UDP header's Length and Ethernet/VLAN
+    IEEE 802.3 Length (a type/length value of 1500 or less), each
+    measured from that header's own offset, and the end of the capture.
+    It is the bound NETProtocols' walk handed *layer*'s decoder, plus
+    *layer*'s own length when it has one (a UDP checksum covers exactly
+    ``length`` bytes). A zero, or a value shorter than its own header,
+    bounds nothing, as in the walk.
+
+    Computed per layer on purpose. ``frame.trailer`` is the bytes past
+    the *tightest* end anywhere in the frame, which in a tunnel is the
+    inner datagram's: an inner Ethernet frame's padding inside VXLAN is
+    trailer, yet it is part of the outer UDP datagram and its checksum.
+    """
+    index, _ = _offset_of(frame, layer)
+    end = len(frame.raw)
+    offset = 0
+    for candidate in frame.layers[: index + 1]:
+        extent = _length_extent(candidate)
+        if extent is not None:
+            end = min(end, offset + extent)
+        offset += candidate.header_len
+    return end
+
+
+def _length_extent(layer: Protocol) -> int | None:
+    """How many bytes, from its own start, *layer*'s length field says
+    belong to it, or ``None`` if it has no such field or the value
+    bounds nothing: 0 (TSO's IPv4 sentinel, IPv6 jumbograms, UDP over
+    IPv6 jumbograms) or less than the header itself."""
+    if isinstance(layer, IPv4):
+        valid = layer.total_length >= layer.header_len
+        return layer.total_length if valid else None
+    if isinstance(layer, IPv6):
+        bounded = layer.payload_length > 0
+        return layer.header_len + layer.payload_length if bounded else None
+    if isinstance(layer, UDP):
+        return layer.length if layer.length >= layer.header_len else None
+    if isinstance(layer, Ethernet | VLAN) and 0 < layer.ethertype <= 1500:
+        # An IEEE 802.3 Length rather than an EtherType.
+        return layer.header_len + layer.ethertype
+    return None
+
+
+def _trailing_bytes(frame: DecodedFrame, layer: Protocol) -> bytes:
+    """The bytes that followed *layer* on the wire, up to its declared
+    end (see :func:`_declared_end`), whether or not anything after it was
+    itself decoded into a further layer — reconstructed from the frame's
+    own raw capture rather than re-serializing subsequent layers, so it
+    is exact regardless of chain depth.
+
+    Ending at the declared end keeps Ethernet padding and a captured FCS
+    out of a checksum that never covered them: a TCP or ICMPv6 checksum
+    sums the segment's length as ``header_len + len(payload)``, so six
+    bytes of padding behind a 54-byte bare ACK would otherwise read as a
+    mismatch on perfectly good traffic.
+    """
+    index, offset = _offset_of(frame, layer)
+    start = offset + frame.layers[index].header_len
+    return frame.raw[start : max(start, _declared_end(frame, layer))]
 
 
 def _enclosing_ip(
@@ -160,9 +209,7 @@ def _enclosing_ip(
     :meth:`~netprotocols.Packet.with_checksums`, so RootWire verifies a
     checksum exactly the way the library would fill it in.
     """
-    index = next(
-        i for i, candidate in enumerate(frame.layers) if candidate is layer
-    )
+    index, _ = _offset_of(frame, layer)
     routing: IPv6Routing | None = None
     for candidate in reversed(frame.layers[:index]):
         if isinstance(candidate, (IPv4, IPv6)):
@@ -176,21 +223,34 @@ def _enclosing_ip(
     return None, None
 
 
-def _is_fragmented(frame: DecodedFrame) -> bool:
-    """Whether this frame is a non-reassembled IP fragment.
+def _is_fragmented(frame: DecodedFrame, layer: Protocol) -> bool:
+    """Whether *layer* sits inside a non-reassembled IP fragment.
 
-    A transport-layer checksum (ICMP/TCP/UDP) covers the *reassembled*
-    datagram; RootWire never reassembles fragments (each renders
-    independently, labeled "first fragment" / "fragment at offset N").
-    Verifying one against a single fragment's bytes would disagree with
-    the wire checksum every time — correctly, but for a reason that has
-    nothing to do with the checksum being wrong, so callers use this to
-    suppress that check rather than flag a false mismatch.
+    A transport-layer checksum (ICMP/TCP/UDP/IGMP/GRE) covers the
+    *reassembled* datagram; RootWire never reassembles fragments (each
+    renders independently, labeled "first fragment" / "fragment at
+    offset N"). Verifying one against a single fragment's bytes would
+    disagree with the wire checksum every time — correctly, but for a
+    reason that has nothing to do with the checksum being wrong, so
+    callers use this to suppress that check rather than flag a false
+    mismatch.
+
+    Only the headers *enclosing* *layer* count: an IPv4 header with More
+    Fragments set or a nonzero Fragment Offset, or an IPv6 Fragment
+    header, anywhere before it. An inner tunnelled datagram's
+    fragmentation therefore suppresses its own checksums but not the
+    outer UDP's, and a fragmented inner IPv4 is caught even when the
+    outer one is whole.
     """
-    ipv4 = frame.layer(IPv4)
-    if ipv4 is not None and (ipv4.flags & 0b001 or ipv4.fragment_offset > 0):
-        return True
-    return any(isinstance(layer, IPv6Fragment) for layer in frame.layers)
+    index, _ = _offset_of(frame, layer)
+    for candidate in frame.layers[:index]:
+        if isinstance(candidate, IPv6Fragment):
+            return True
+        if isinstance(candidate, IPv4) and (
+            candidate.flags & 0b001 or candidate.fragment_offset > 0
+        ):
+            return True
+    return False
 
 
 def _checksum_note(
@@ -227,12 +287,25 @@ def _transport_checksum_note(frame: DecodedFrame, layer: Protocol) -> str:
     """:func:`_checksum_note` for a layer whose checksum covers what
     follows it (TCP, UDP), with its enclosing IP and Routing headers;
     ``""`` for a non-reassembled fragment (see :func:`_is_fragmented`)."""
-    if _is_fragmented(frame):
+    if _is_fragmented(frame, layer):
         return ""
     ip, routing = _enclosing_ip(frame, layer)
     return _checksum_note(
         layer, ip=ip, routing=routing, payload=_trailing_bytes(frame, layer)
     )
+
+
+def _lying_ipv4(frame: DecodedFrame) -> IPv4 | None:
+    """The IPv4 header whose ``total_length`` is shorter than itself,
+    the one ``frame.malformed_length`` reports: always the last IPv4
+    header decoded, outer or tunnelled, since the walk stops there."""
+    for layer in reversed(frame.layers):
+        if (
+            isinstance(layer, IPv4)
+            and 0 < layer.total_length < layer.header_len
+        ):
+            return layer
+    return None
 
 
 class Output(ABC):
@@ -288,6 +361,9 @@ class OutputToScreen(Output):
             self._print(f"{_II}[!] {what} malformed: {reason}")
 
     def update(self, frame: DecodedFrame) -> None:
+        """Render one frame: a header line, every layer through its
+        registered renderer, the frame-level diagnostics, and (with
+        ``display_payload``) the sanitized undecoded payload."""
         local_time = time.strftime(
             "%H:%M:%S", time.localtime(frame.timestamp / 1_000_000_000)
         )
@@ -331,7 +407,7 @@ class OutputToScreen(Output):
                 f"{_I}[!] Truncated: the IP datagram declares more bytes "
                 f"than were captured"
             )
-        if frame.malformed_length and (ip := frame.layer(IPv4)) is not None:
+        if frame.malformed_length and (ip := _lying_ipv4(frame)) is not None:
             self._print(
                 f"{_I}[!] Malformed: IPv4 total_length ({ip.total_length}) "
                 f"is smaller than its header ({ip.header_len} bytes); "
@@ -444,17 +520,20 @@ class OutputToScreen(Output):
 
     @_render.register
     def _(self, layer: GRE, frame: DecodedFrame) -> None:
+        """GRE: the encapsulated protocol and which optional fields are
+        present, with the checksum verified (over the datagram up to its
+        IP header's declared end) when the Checksum-Present bit is set."""
         self._print(f"{_I}[+] GRE (protocol: {layer.protocol_name})")
         optional = []
         if layer.checksum_present:
             ip, _ = _enclosing_ip(frame, layer)
             note = (
                 ""
-                if _is_fragmented(frame)
+                if _is_fragmented(frame, layer)
                 else _checksum_note(
                     layer,
                     ip=ip,
-                    payload=_trailing_bytes(frame, layer, with_trailer=True),
+                    payload=_trailing_bytes(frame, layer),
                 )
             )
             optional.append(f"Checksum: {layer.checksum_hex_str}{note}")
@@ -468,9 +547,14 @@ class OutputToScreen(Output):
 
     @_render.register
     def _(self, layer: IGMP, frame: DecodedFrame) -> None:
+        """IGMP: message type, Max Resp Code and verified checksum, then
+        the group (v1/v2 report, leave, query) or every v3 group record,
+        parsed lazily inside a guard."""
         self._print(f"{_I}[+] IGMP {layer.type_name}")
         ip, _ = _enclosing_ip(frame, layer)
-        note = "" if _is_fragmented(frame) else _checksum_note(layer, ip=ip)
+        note = (
+            "" if _is_fragmented(frame, layer) else _checksum_note(layer, ip=ip)
+        )
         self._print(
             f"{_II}Max Resp Code: {layer.max_resp_code} | "
             f"Checksum: {layer.checksum_hex_str}{note}"
@@ -498,6 +582,9 @@ class OutputToScreen(Output):
     def _render_icmp(
         self, layer: ICMPv4 | ICMPv6, frame: DecodedFrame, *, version: int
     ) -> None:
+        """Shared ICMPv4/ICMPv6 rendering: the enclosing route, type/code
+        and a checksum verified against the nearest IP header (plus any
+        Routing header), then Neighbor Discovery detail for ICMPv6."""
         ip, routing = _enclosing_ip(frame, layer)
         route = f" {ip.src} -> {ip.dst}" if ip is not None else ""
         self._print(f"{_I}[+] ICMPv{version}{route}")
@@ -509,7 +596,7 @@ class OutputToScreen(Output):
         # message, which this single fragment's bytes never match.
         note = (
             ""
-            if _is_fragmented(frame)
+            if _is_fragmented(frame, layer)
             else _checksum_note(
                 layer,
                 ip=ip,
@@ -567,6 +654,9 @@ class OutputToScreen(Output):
 
     @_render.register
     def _(self, layer: DNS, frame: DecodedFrame) -> None:
+        """DNS: direction, transaction ID, flags/opcode/RCODE and every
+        question and answer, names and RDATA sanitized; the records are
+        parsed lazily, so they render inside a guard."""
         direction = "response" if layer.qr else "query"
         self._print(f"{_I}[+] DNS {direction} (id {layer.transaction_id:#06x})")
         self._print(
@@ -596,6 +686,9 @@ class OutputToScreen(Output):
 
     @_render.register
     def _(self, layer: DHCP, frame: DecodedFrame) -> None:
+        """DHCP: message type (falling back to BOOTP op), client MAC and
+        XID, the four address fields, and a parsed-option count, the
+        options guarded since they parse on demand."""
         try:
             message_type = layer.message_type_name
         except ProtocolError:
@@ -720,6 +813,8 @@ class OutputToNDJSON(Output):
         self._stream = stream if stream is not None else sys.stdout
 
     def update(self, frame: DecodedFrame) -> None:
+        """Serialize *frame* as one compact JSON object and flush it, so a
+        downstream consumer such as ``jq`` sees each frame as it arrives."""
         record = {
             "number": frame.number,
             "timestamp": frame.timestamp,

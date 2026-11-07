@@ -410,6 +410,8 @@ class TestCrossCheckAgainstTheDecoder:
     def test_tcp_udp_matches_ip_protocol_number_in_both_stacks(
         self, expr, proto_number
     ):
+        """tcp/udp match the protocol number of the IP header directly behind
+        Ethernet, over IPv4 and IPv6 alike, on every corpus frame."""
         program = compile_expression(expr)
         for frame in _CORPUS_FRAMES:
             l3 = _untagged_l3(frame)
@@ -444,6 +446,8 @@ class TestCrossCheckAgainstTheDecoder:
             assert actual == expected
 
     def test_host_matches_decoded_ipv4_addresses(self):
+        """host matches when the untagged IPv4 header names the address as
+        source or destination, and never otherwise."""
         program = compile_expression("host 192.168.1.96")
         target = ipaddress.IPv4Address("192.168.1.96")
         for frame in _CORPUS_FRAMES:

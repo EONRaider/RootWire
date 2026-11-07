@@ -166,10 +166,21 @@ as exceptions to die on:
   once.
 - **Padding and FCS?** The walk ends every buffer at the tightest end
   the frame's length fields declare; the bytes past it are the
-  library's `packet.trailer`, kept as `frame.trailer` and out of both
-  `frame.payload` and every checksum input.
-- **Truncated datagram?** If the IP layer declares more bytes than
-  were captured, `frame.truncated` is set and the renderer says so.
+  library's `packet.trailer`, kept as `frame.trailer` and out of
+  `frame.payload`. Checksums do not use the trailer: each layer's
+  checksum input ends at *its own* declared end (`_declared_end` in
+  `output.py`: the tightest IPv4/IPv6/UDP/802.3 length among the
+  headers enclosing it, itself included). The two differ in a tunnel,
+  where the tightest end is the inner datagram's: an inner Ethernet
+  frame's padding inside VXLAN is trailer, yet part of the outer UDP
+  datagram its checksum covers.
+- **Truncated datagram?** If the outermost IP header declares more
+  bytes than were captured, `frame.truncated` is set and the renderer
+  says so. The header's offset is the sum of the headers before it,
+  so a VLAN tag, QinQ pair, MPLS stack or LLC/SNAP in front of it
+  counts. Fragment checks follow the same per-layer rule: a checksum
+  is skipped only when an IPv4 fragment or IPv6 Fragment header
+  *encloses* its layer.
 - **Crafted amplification?** The decode chain is capped at 32 layers
   per frame, the library's own default. IPv6 extension headers chain
   legitimately (an MLD report is `Ethernet / IPv6 / Hop-by-Hop /

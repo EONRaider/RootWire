@@ -86,12 +86,15 @@ class TestOutputToScreen:
     def test_unknown_and_truncated_diagnostics(
         self, unknown_ethertype_frame, truncated_frame
     ):
+        """An unregistered EtherType ends at Ethernet, and a capture cut in
+        the TCP header is diagnosed as both malformed and truncated."""
         assert "EtherType: 0x88b5" in render(unknown_ethertype_frame)
         truncated_text = render(truncated_frame)
         assert "Malformed header: TCP" in truncated_text
         assert "Truncated" in truncated_text
 
     def test_malformed_ip_length_is_diagnosed(self):
+        """A lying IPv4 total_length is diagnosed once, by its specific line."""
         text = render(ipv4_udp(total_length=4))
         assert "Malformed: IPv4 total_length (4)" in text
         assert "smaller than its header (20 bytes)" in text

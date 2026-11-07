@@ -173,8 +173,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **False checksum mismatches on padded frames.** A TCP/UDP/ICMPv6
   checksum input included Ethernet padding and any captured FCS (a
   54-byte bare ACK padded to 60 bytes summed 6 bytes too many); it now
-  ends at the declared datagram end. ICMPv4 now gets its IP header too,
-  so the library bounds its sum the same way.
+  ends at that layer's own declared end, the tightest IPv4/IPv6/UDP/802.3
+  length among the headers enclosing it. Per layer rather than the
+  frame's trailer, so a VXLAN tunnel's outer UDP checksum still covers
+  the inner frame's padding. ICMPv4 now gets its IP header too, so the
+  library bounds its sum the same way.
+- **Checksums were skipped, or wrongly checked, around tunnelled
+  fragments.** Fragmentation was judged frame-wide from the outermost
+  IPv4 header and any IPv6 Fragment header anywhere, so an inner IPv4
+  fragment got a false mismatch and an inner IPv6 fragment hid the
+  outer UDP's. A checksum is now skipped only when a fragment header
+  encloses its own layer.
+- **Truncation was missed behind a VLAN tag.** The truncation check put
+  the IP header at a fixed offset of 14 bytes, so a capture short by up
+  to a VLAN tag's (or QinQ pair's, MPLS stack's, LLC/SNAP header's)
+  length read as complete. It now uses the outermost IP header's true
+  offset.
+- **A lying *inner* IPv4 length was not flagged** as
+  `malformed_length` (only the first IPv4 header was checked); every
+  IPv4 header is checked now, and the screen line quotes the one that
+  lied.
 
 ## [6.0.0] - 2026-09-09
 

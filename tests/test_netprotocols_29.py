@@ -37,6 +37,7 @@ from netprotocols import (
     TFTP,
     TLS,
     UDP,
+    VLAN,
     VXLAN,
     DNSOverTCP,
     Ethernet,
@@ -48,6 +49,7 @@ from netprotocols import (
     Packet,
     Protocol,
     TruncatedHeaderError,
+    compute,
 )
 
 from conftest import FIXTURES, _eth, _ipv4, corpus_frames, read_pcap
@@ -70,6 +72,7 @@ def decode(data: bytes) -> DecodedFrame:
 
 
 def render(data: bytes | DecodedFrame, *, display_payload: bool = False) -> str:
+    """Render *data* (raw bytes, or an already decoded frame) to text."""
     frame = data if isinstance(data, DecodedFrame) else decode(data)
     stream = io.StringIO()
     OutputToScreen(display_payload=display_payload, stream=stream).update(frame)
@@ -77,6 +80,7 @@ def render(data: bytes | DecodedFrame, *, display_payload: bool = False) -> str:
 
 
 def malformed_count(*frames: bytes) -> str:
+    """The StatsCollector report for *frames*, decoded in order."""
     stats = StatsCollector()
     for data in frames:
         stats.update(decode(data))
@@ -126,6 +130,8 @@ def _with_checksums(*layers: Protocol, payload: bytes = b"") -> bytes:
 
 
 def tcp_segment(dst_port: int, payload: bytes = b"", *, v6: bool = False):
+    """An Ethernet/IP/TCP bare ACK (or data segment) to *dst_port* with
+    every checksum filled in by the library."""
     tcp = _tcp(dst_port)
     if v6:
         ip: Protocol = _ipv6(6, 20 + len(payload))
@@ -135,6 +141,8 @@ def tcp_segment(dst_port: int, payload: bytes = b"", *, v6: bool = False):
 
 
 def udp_datagram(dst_port: int, payload: bytes = b"", *, v6: bool = False):
+    """An Ethernet/IP/UDP datagram to *dst_port* with every checksum
+    filled in by the library."""
     udp = _udp(dst_port, len(payload))
     if v6:
         ip: Protocol = _ipv6(17, 8 + len(payload))
@@ -184,6 +192,7 @@ class TestBestEffortSet:
         assert not {LLDP, CDP, IPv4, IPv6, TCP, UDP} & _BEST_EFFORT_L7
 
     def test_tables_actually_dispatch_on_those_ports(self):
+        """The well-known ports these tests flood really are dispatched."""
         assert {443, 179, 3478} <= set(_TCP_L7_PORTS)
         assert {123, 1812, 1813, 1985, 69, 520, 4789, 3478} <= set(
             _UDP_L7_PORTS
@@ -198,6 +207,7 @@ class TestBareSegmentFlood:
     @pytest.mark.parametrize("v6", [False, True], ids=["ipv4", "ipv6"])
     @pytest.mark.parametrize("port", _TCP_L7_PORTS)
     def test_bare_ack_is_a_miss_not_malformed(self, port, v6):
+        """An empty TCP segment to a best-effort port ends at TCP, clean."""
         frame = decode(tcp_segment(port, v6=v6))
         assert type(frame.layers[-1]) is TCP
         assert frame.error is None
@@ -210,6 +220,7 @@ class TestBareSegmentFlood:
     @pytest.mark.parametrize("v6", [False, True], ids=["ipv4", "ipv6"])
     @pytest.mark.parametrize("port", _UDP_L7_PORTS)
     def test_empty_datagram_is_a_miss_not_malformed(self, port, v6):
+        """An empty UDP datagram to a best-effort port ends at UDP, clean."""
         frame = decode(udp_datagram(port, v6=v6))
         assert type(frame.layers[-1]) is UDP
         assert frame.error is None
@@ -217,6 +228,7 @@ class TestBareSegmentFlood:
         assert "[!]" not in render(frame)
 
     def test_flood_counts_nothing_as_malformed(self):
+        """Thousands of bare segments across every port: zero malformed."""
         frames = [tcp_segment(p) for p in _TCP_L7_PORTS] * 50 + [
             udp_datagram(p, v6=True) for p in _UDP_L7_PORTS
         ] * 50
@@ -245,6 +257,8 @@ class TestBareSegmentFlood:
         assert "malformed: 1" in malformed_count(udp_datagram(53, b"\x00"))
 
     def test_truncated_dns_over_tcp_is_still_an_error(self):
+        """One byte on TCP 53 cannot be a DNS-over-TCP length prefix plus
+        message; that stays a real error."""
         frame = decode(tcp_segment(53, b"\x00"))
         assert frame.error is not None
         assert frame.l7_miss is None
@@ -282,6 +296,7 @@ class TestLayerCeiling:
     self-chaining segment past it is a miss, not malformed."""
 
     def test_ceiling_is_at_least_the_library_default(self):
+        """RootWire never caps below the library's own default depth."""
         assert _MAX_LAYERS >= netprotocols.MAX_DEPTH
 
     def test_dense_bgp_segment_is_benign(self):
@@ -362,12 +377,14 @@ class TestLyingLength:
         assert "malformed: 1" in malformed_count(data)
 
     def test_lying_ipv4_length_counts_once(self):
+        """A lying IPv4 length is one malformed frame, not two."""
         from conftest import ipv4_udp
 
         report = malformed_count(ipv4_udp(total_length=4))
         assert "malformed: 1," in report
 
     def test_tso_zero_length_still_exempt(self):
+        """total_length 0 (TSO) is not a lie and stops nothing."""
         from conftest import ipv4_udp
 
         frame = decode(ipv4_udp(total_length=0))
@@ -389,6 +406,8 @@ class TestChecksumContext:
         assert "mismatch" not in render(frame)
 
     def test_padded_icmpv4_echo_verifies(self):
+        """An echo request padded to 60 bytes with non-zero fill verifies:
+        the sum ends at the IPv4 header's declared end."""
         icmp = ICMPv4(type=8, code=0, checksum=0, rest=b"\x00\x01\x00\x01")
         ip = _ipv4(protocol=1, total_length=28)
         data = _with_checksums(_eth(0x0800), ip, icmp) + b"\xff" * 18
@@ -397,6 +416,7 @@ class TestChecksumContext:
         assert "mismatch" not in render(frame)
 
     def test_padded_igmp_report_verifies(self):
+        """An IGMPv2 report padded to 60 bytes with non-zero fill verifies."""
         igmp = IGMP(
             type=0x16, max_resp_code=0, checksum=0, body=b"\xe0\0\0\xfb"
         )
@@ -406,6 +426,7 @@ class TestChecksumContext:
         assert "IGMP" in text and "mismatch" not in text
 
     def test_bad_igmp_checksum_is_flagged(self):
+        """A wrong IGMP checksum is flagged with the expected value."""
         igmp = IGMP(
             type=0x16, max_resp_code=0, checksum=0x1234, body=b"\xe0\0\0\xfb"
         )
@@ -467,11 +488,126 @@ class TestChecksumContext:
         assert not offenders, "\n".join(offenders)
 
 
+def _vxlan_around(inner: bytes, *, udp_checksum: int | None = None) -> bytes:
+    """Outer Ethernet/IPv4/UDP 4789/VXLAN carrying *inner* (a whole
+    Ethernet frame, padding included) as the UDP payload. The outer UDP
+    checksum is the library's own computation over every byte the UDP
+    Length covers, unless *udp_checksum* overrides it."""
+    vxlan = VXLAN(flags=0x08, reserved1=0, vni=7, reserved2=0)
+    body = bytes(vxlan) + inner
+    udp = _udp(4789, len(body))
+    ip = _ipv4(protocol=17, total_length=20 + 8 + len(body))
+    ip = Packet(_eth(0x0800), ip).with_checksums().layers[1]
+    assert isinstance(ip, IPv4)
+    checksum = compute(udp, ip=ip, payload=body)
+    udp = UDP(
+        src_port=udp.src_port,
+        dst_port=udp.dst_port,
+        length=udp.length,
+        checksum=checksum if udp_checksum is None else udp_checksum,
+    )
+    return bytes(_eth(0x0800)) + bytes(ip) + bytes(udp) + body
+
+
+class TestPerLayerContext:
+    """Each layer is judged by the headers that enclose *it*, not by
+    frame-wide facts (first IP, frame trailer, any fragment anywhere)."""
+
+    def test_outer_udp_checksum_covers_inner_frame_padding(self):
+        """The inner Ethernet frame is padded to 60 bytes. Its padding is
+        the frame's trailer (past the inner IPv4's declared end) but lies
+        inside the outer UDP datagram, so the outer checksum covers it."""
+        icmp = ICMPv4(type=8, code=0, checksum=0, rest=b"\x00\x01\x00\x01")
+        inner = _with_checksums(
+            _eth(0x0800), _ipv4(protocol=1, total_length=28), icmp
+        )
+        inner += b"\x5a" * (60 - len(inner))
+        frame = decode(_vxlan_around(inner))
+        assert len(frame.trailer) == 18  # the inner frame's padding
+        assert "mismatch" not in render(frame)
+
+    def test_bad_outer_udp_checksum_still_flagged(self):
+        """Covering the inner padding must not hide a genuinely wrong outer
+        UDP checksum."""
+        icmp = ICMPv4(type=8, code=0, checksum=0, rest=b"\x00\x01\x00\x01")
+        inner = _with_checksums(
+            _eth(0x0800), _ipv4(protocol=1, total_length=28), icmp
+        )
+        text = render(_vxlan_around(inner, udp_checksum=0x1234))
+        assert "Checksum: 0x1234 [!] mismatch" in text
+
+    def test_inner_fragment_suppresses_only_inner_checksums(self):
+        """An inner IPv4 first fragment (MF set) in a whole outer
+        datagram: the inner UDP checksum spans the reassembled datagram
+        and is not checked; the outer UDP checksum still is."""
+        inner_ip = IPv4(
+            version=4,
+            ihl=5,
+            dscp=0,
+            ecn=0,
+            total_length=20 + 8 + 4,
+            identification=1,
+            flags=0b001,  # More Fragments
+            fragment_offset=0,
+            ttl=64,
+            protocol=17,
+            checksum=0,
+            src="10.0.0.1",
+            dst="10.0.0.2",
+        )
+        inner_udp = UDP(src_port=1, dst_port=40001, length=1000, checksum=0xBAD)
+        inner = (
+            _with_checksums(_eth(0x0800), inner_ip) + bytes(inner_udp) + b"frag"
+        )
+        text = render(_vxlan_around(inner, udp_checksum=0x1234))
+        assert "Checksum: 0x1234 [!] mismatch" in text  # outer UDP
+        assert "Checksum: 0x0bad [!]" not in text  # inner UDP: skipped
+
+    def test_truncation_anchored_at_ip_behind_a_vlan_tag(self):
+        """A VLAN-tagged datagram short by two bytes. With the old fixed
+        14-byte IP offset, the 4-byte tag hid the shortfall."""
+        payload = b"\xaa" * 8
+        ip = _ipv4(protocol=17, total_length=20 + 8 + len(payload))
+        data = bytes(
+            Packet(
+                _eth(0x8100),
+                VLAN(pcp=0, dei=0, vid=30, ethertype=0x0800),
+                ip,
+                _udp(40001, len(payload)),
+            )
+        )
+        data += payload
+        assert not decode(data).truncated
+        assert decode(data[:-2]).truncated
+
+    def test_lying_inner_ipv4_length_is_flagged(self):
+        """A valid outer IPv4 around an inner one whose total_length (4)
+        is shorter than its header: flagged, and the screen names the
+        inner header's values."""
+        inner_ip = _ipv4(protocol=17, total_length=4)
+        inner = bytes(_eth(0x0800)) + bytes(inner_ip) + b"\x00" * 8
+        frame = decode(_vxlan_around(inner))
+        assert frame.malformed_length
+        text = render(frame)
+        assert "Malformed: IPv4 total_length (4)" in text
+        assert text.count("[!] Malformed") == 1
+
+    def test_positional_construction_still_binds_raw(self):
+        """l7_miss and trailer were added after raw, so code that built a
+        DecodedFrame positionally keeps its captured bytes in raw."""
+        frame = DecodedFrame(
+            1, 0, None, 3, (), b"", False, False, None, b"\x01\x02\x03"
+        )
+        assert frame.raw == b"\x01\x02\x03"
+        assert frame.l7_miss is None and frame.trailer == b""
+
+
 class TestNDJSONNested:
     """C3: nested bytes anywhere in a layer serialize."""
 
     @staticmethod
     def emit(data: bytes) -> dict[str, object]:
+        """Serialize one frame and return its parsed JSON record."""
         stream = io.StringIO()
         OutputToNDJSON(stream).update(decode(data))
         record = json.loads(stream.getvalue())
@@ -479,6 +615,7 @@ class TestNDJSONNested:
         return record
 
     def test_lldp_tlv_values_are_hex(self):
+        """Every LLDP TLV value, two levels into the layer, is hex."""
         for data in read_pcap(FIXTURES / "lldp.pcap"):
             record = self.emit(data)
             layers = record["layers"]
@@ -490,6 +627,7 @@ class TestNDJSONNested:
                 bytes.fromhex(tlv["value"])  # hex, not a crash
 
     def test_cdp_via_snap_serializes(self):
+        """CDP, reached through LLC/SNAP, serializes with hex TLV values."""
         cdp_seen = 0
         for data in read_pcap(FIXTURES / "llc.pcap"):
             record = self.emit(data)
@@ -503,6 +641,7 @@ class TestNDJSONNested:
         assert cdp_seen >= 3
 
     def test_private_decode_context_is_not_emitted(self):
+        """BGP's underscored decode context (``_followed``) is not emitted."""
         record = self.emit(tcp_segment(179, _keepalives(2)))
         layers = record["layers"]
         assert isinstance(layers, list)
@@ -526,6 +665,7 @@ class TestNDJSONNested:
         assert layers[2]["type_"] == 8
 
     def test_new_frame_fields(self):
+        """l7_miss and trailer_len reach NDJSON for a padded bare ACK on 443."""
         record = self.emit(tcp_segment(443) + b"\x00" * 6)
         assert record["l7_miss"] is not None
         assert record["error"] is None
@@ -533,6 +673,8 @@ class TestNDJSONNested:
         assert record["payload_len"] == 0
 
     def test_default_hook_value_types(self):
+        """Each value type the hook knows maps to its JSON form, and an
+        unknown one falls back to ``str``."""
         import enum
         import ipaddress
 
@@ -565,11 +707,13 @@ class TestSanitizedDiagnostics:
         return DecodedFrame(**{**defaults, **fields})  # type: ignore[arg-type]
 
     def test_error_line_is_sanitized(self):
+        """ESC and CR in a decode error reach the terminal escaped."""
         text = render(self.frame(error="bad \x1b[2Jlabel\r"))
         assert "\x1b" not in text and "\r" not in text
         assert "\\x1b[2Jlabel\\x0d" in text
 
     def test_l7_miss_line_is_sanitized(self):
+        """C1 and bidi controls in an l7_miss note are escaped."""
         text = render(self.frame(l7_miss="odd \x9b31m\u202e"))
         assert "\x9b" not in text and "\u202e" not in text
         assert "\\x9b31m\\u202e" in text
@@ -587,6 +731,8 @@ class TestGuard:
         return udp_datagram(53, dns)
 
     def test_protocol_error_is_contained(self):
+        """A ProtocolError from a lazy section becomes a [!] line, after
+        whatever the renderer printed before it."""
         text = render(self.dns_frame())
         assert "DNS query (id 0x1234)" in text  # printed before the fault
         assert "[!] Records malformed: DNS name runs past the message" in text
@@ -595,6 +741,8 @@ class TestGuard:
         )
 
     def test_guard_message_is_sanitized(self, monkeypatch):
+        """The guard's [!] line escapes control characters in the message."""
+
         def hostile(_: DNS) -> object:
             raise TruncatedHeaderError("short \x1b]0;pwned\x07")
 

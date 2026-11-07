@@ -68,17 +68,22 @@ class TestBestEffortMissesInRealTraffic:
     tests/test_netprotocols_29.py pins synthetically."""
 
     @pytest.mark.parametrize(
-        ("capture", "minimum_misses"),
+        ("capture", "minimum_misses", "some_decode_whole"),
         [
-            ("bgp_session.pcap", 50),
-            ("tls_session.pcap", 60),
-            ("stun_rfc3489.pcap", 4),
-            ("tcp_https.pcap", 5),
+            ("bgp_session.pcap", 50, True),
+            ("tls_session.pcap", 60, True),
+            # Every RFC 3489 message is rejected at the magic cookie, so
+            # this capture is nothing but misses, by design.
+            ("stun_rfc3489.pcap", 4, False),
+            ("tcp_https.pcap", 5, True),
         ],
     )
     def test_session_capture_misses_without_errors(
-        self, capture, minimum_misses
+        self, capture, minimum_misses, some_decode_whole
     ):
+        """Every frame of the capture decodes with no error, at least
+        *minimum_misses* of them as best-effort misses, and (where the
+        capture holds whole messages) some still decode beyond TCP/UDP."""
         frames = [frame for name, _, frame in CORPUS if name == capture]
         assert frames
         decoded = [
@@ -88,3 +93,18 @@ class TestBestEffortMissesInRealTraffic:
         assert all(frame.error is None for frame in decoded)
         misses = sum(frame.l7_miss is not None for frame in decoded)
         assert misses >= minimum_misses
+        # Misses must not be all there is: the frames holding whole
+        # messages still decode them.
+        assert some_decode_whole == any(
+            frame.l7_miss is None and len(frame.layers) > 3 for frame in decoded
+        )
+
+    def test_tls_session_still_decodes_whole_records(self):
+        """Frame 39 holds whole TLS records; it decodes to a TLS layer
+        rather than being swallowed by the miss rule."""
+        frames = [f for name, _, f in CORPUS if name == "tls_session.pcap"]
+        decoded = decode_frame(
+            frames[39], number=1, timestamp=0, interface="corpus"
+        )
+        assert type(decoded.layers[-1]).__name__ == "TLS"
+        assert decoded.l7_miss is None

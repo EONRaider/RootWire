@@ -45,20 +45,23 @@ class DecodedFrame:
     :param error: Diagnostic message when the decode chain aborted on a
         malformed header, else ``None``. The layers decoded before the
         failure are preserved.
+    :param raw: The exact captured bytes of the whole frame — the same
+        object the decoder received, so keeping it costs no copy. This
+        is what pcap output writes.
     :param l7_miss: Why a *best-effort*, port-dispatched application
         decoder (TLS on 443, BGP on 179, NTP on 123, ...) did not
         decode the payload, else ``None``. Not an error: a bare ACK or a
         mid-stream continuation segment on a well-known port is ordinary
         traffic, not a malformed frame. The bytes that decoder refused
         are left in *payload*. Never set together with *error*.
-    :param trailer: Bytes past the end the frame's length fields
-        declare (IPv4 Total Length, IPv6 Payload Length, UDP Length, an
-        802.3 Length): Ethernet padding or a captured FCS. They belong
-        to no layer, so they are kept out of *payload* and out of every
-        checksum.
-    :param raw: The exact captured bytes of the whole frame — the same
-        object the decoder received, so keeping it costs no copy. This
-        is what pcap output writes.
+    :param trailer: Bytes past the *tightest* end the frame's length
+        fields declare (IPv4 Total Length, IPv6 Payload Length, UDP
+        Length, an 802.3 Length): Ethernet padding or a captured FCS, the
+        library's ``packet.trailer``. Kept out of *payload*. Checksums do
+        not use it: each ends at its own layer's declared end instead,
+        because in a tunnel the tightest end is the inner datagram's, and
+        an inner frame's padding inside VXLAN is trailer yet still part
+        of the outer UDP datagram its checksum covers.
     """
 
     number: int
@@ -70,9 +73,11 @@ class DecodedFrame:
     truncated: bool = False
     malformed_length: bool = False
     error: str | None = None
+    raw: bytes = b""
+    # Added after ``raw`` so that positional construction from before
+    # these fields existed keeps binding the captured bytes to ``raw``.
     l7_miss: str | None = None
     trailer: bytes = b""
-    raw: bytes = b""
 
     def layer(self, protocol: type[_P]) -> _P | None:
         """The first decoded layer of the given class, or ``None``.
