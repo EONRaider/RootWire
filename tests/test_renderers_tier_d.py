@@ -156,6 +156,10 @@ def test_corpus_frames_render_without_fallback_or_fault(name: str) -> None:
         assert "malformed:" not in text, (name, index)
         assert "mismatch" not in text, (name, index)
         assert "[!]" not in text, (name, index)
+        if name == "stun.pcap":
+            # Every frame here is RFC 8489 STUN: none may regress to a
+            # best-effort miss, which the checks above would let pass.
+            assert "[+] STUN " in text, (name, index)
 
 
 # --- VXLAN -----------------------------------------------------------------
@@ -383,6 +387,15 @@ def test_radius_malformed_attributes_are_contained() -> None:
     assert "User-Name" not in text
 
 
+def test_radius_text_attributes_are_capped() -> None:
+    """Repeated text attributes get a line each up to the list limit,
+    then a count: one packet could otherwise print thousands of lines."""
+    attributes = bytes(RADIUSAttribute(18, b"m")) * (_LIST_LIMIT + 4)
+    text = render(radius_frame(2, attributes))
+    assert text.count("Reply-Message: m\n") == _LIST_LIMIT
+    assert "(+4 more text attributes)" in text
+
+
 def test_radius_attributes_are_capped() -> None:
     """More non-text attributes than the list limit are capped."""
     attributes = bytes(RADIUSAttribute(5, struct.pack("!I", 1))) * (
@@ -457,6 +470,14 @@ def test_stun_misplaced_fingerprint_is_flagged() -> None:
         )
     )
     assert "Fingerprint: [!] misplaced (not the last attribute" in text
+
+
+def test_stun_short_last_fingerprint_is_invalid_not_misplaced() -> None:
+    """A last FINGERPRINT whose value is not 4 bytes is flagged as
+    invalid, not misdiagnosed as out of place."""
+    text = render(stun_frame(STUNAttribute(STUN.FINGERPRINT, b"\x00" * 3)))
+    assert "Fingerprint: [!] invalid (3 bytes, not 4, RFC 8489 §14.7)" in text
+    assert "misplaced" not in text
 
 
 def test_stun_software_and_reason_are_sanitized() -> None:

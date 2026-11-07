@@ -1605,12 +1605,20 @@ class OutputToScreen(Output):
         self._print(f"{_II}Authenticator: {layer.authenticator.hex()}")
         with self._guard("RADIUS attributes"):
             attributes = layer.parsed_attributes
-            for attribute in attributes:
-                if attribute.type in _RADIUS_TEXT_ATTRIBUTES:
-                    self._print(
-                        f"{_II}{attribute.type_name}: "
-                        f"{_radius_text(attribute.data)}"
-                    )
+            texts = [
+                attribute
+                for attribute in attributes
+                if attribute.type in _RADIUS_TEXT_ATTRIBUTES
+            ]
+            # One line each, capped like a list line: one 4096-byte
+            # packet can hold some 2,000 empty Reply-Messages.
+            for attribute in texts[:_LIST_LIMIT]:
+                self._print(
+                    f"{_II}{attribute.type_name}: "
+                    f"{_radius_text(attribute.data)}"
+                )
+            if (extra := len(texts) - _LIST_LIMIT) > 0:
+                self._print(f"{_II}(+{extra} more text attributes)")
             others = [
                 _radius_attribute_text(attribute)
                 for attribute in attributes
@@ -1912,17 +1920,24 @@ def _radius_attribute_text(attribute: RADIUSAttribute) -> str:
     return f"{attribute.type_name} ({len(attribute.data)} bytes)"
 
 
+#: The size of a STUN FINGERPRINT's value: a CRC-32.
+_STUN_FINGERPRINT_LEN = 4
+
+
 def _stun_fingerprint_text(layer: STUN) -> str:
     """A STUN message's FINGERPRINT as hex, flagged when it does not
     verify (see :func:`_checksum_note`); a FINGERPRINT that is not the
     last attribute, which RFC 8489 §14.7 does not define and receivers
-    reject, flagged as misplaced (NETProtocols cannot compute the value
-    it should have there); ``"none"`` without one."""
+    reject, flagged as misplaced, and one whose value is not 4 bytes
+    flagged as invalid (NETProtocols cannot compute the value either
+    should have); ``"none"`` without one."""
     if (fingerprint := layer.fingerprint) is not None:
         return f"{fingerprint:#010x}{_checksum_note(layer)}"
-    if layer.attribute(STUN.FINGERPRINT) is not None:
-        return "[!] misplaced (not the last attribute, RFC 8489 §14.7)"
-    return "none"
+    if (found := layer.attribute(STUN.FINGERPRINT)) is None:
+        return "none"
+    if len(found.value) != _STUN_FINGERPRINT_LEN:
+        return f"[!] invalid ({len(found.value)} bytes, not 4, RFC 8489 §14.7)"
+    return "[!] misplaced (not the last attribute, RFC 8489 §14.7)"
 
 
 def _stun_address_text(address: STUNAddress) -> str:
