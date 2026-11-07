@@ -442,6 +442,10 @@ class TestChecksumContext:
             segments_left=1,
             data=b"\x00" * 4 + final,
         )
+        # Guard against a vacuous pass: if the library could not read a
+        # final destination out of this RH0 data, both the oracle and
+        # RootWire would silently fall back to IPv6.dst and agree.
+        assert routing.final_destination(_V6_DST) == _V6_FINAL
         ip = _ipv6(43, routing.header_len + upper.header_len + len(payload))
         data = _with_checksums(
             _eth(0x86DD), ip, routing, upper, payload=payload
