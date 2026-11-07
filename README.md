@@ -140,7 +140,13 @@ rootwire -r lab.pcap --decode-as udp.port=1812:none   # leave RADIUS's port unde
 A port is only a hint, so a class `--decode-as` maps to a port gets the
 same treatment as the library's own port-dispatched decoders: a segment
 that does not hold a whole message of it (a bare ACK, a response body
-sent after its head) is noted with `[~]`, not reported as malformed.
+sent after its head) is not reported as malformed, and when undecoded
+bytes remain, screen output notes them with `[~]` (a bare ACK has none,
+so it gets no note). Two exceptions keep their faults reported as
+`[!] Malformed`: DNS, DNS-over-TCP and DHCP, whose malformations are
+signal wherever they appear, and any class a header's own type field
+also reaches (EtherType, LLC, IP protocol — `udp.port=4000:IPv4`, say),
+so that a mapping cannot hide that header's faults elsewhere.
 
 Live capture needs a raw socket, which on Linux means root
 (`sudo rootwire -i eth0`) or granting the interpreter the

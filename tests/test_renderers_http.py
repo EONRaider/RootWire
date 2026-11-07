@@ -89,6 +89,7 @@ def test_post_body_size_not_bytes() -> None:
     assert "[+] HTTP POST /echo (HTTP/1.1)" in text
     assert "Content-Type: application/x-www-form-urlencoded\n" in text
     assert "Body: 17 bytes (content_length)\n" in text
+    assert "name=netprotocols" not in text
 
 
 def test_pipelined_requests_are_counted() -> None:
@@ -178,3 +179,12 @@ def test_fields_line_is_capped() -> None:
     fields = b"".join(b"X-%d: 1\r\n" % n for n in range(_LIST_LIMIT + 4))
     text = message(b"GET / HTTP/1.1\r\nHost: a\r\n" + fields + b"\r\n")
     assert "(+5 more)" in text
+
+
+def test_repeated_triage_field_is_capped() -> None:
+    """A triage field repeated past the list limit shows that many lines
+    and a count, not one line per occurrence."""
+    hosts = b"".join(b"Host: h%d\r\n" % n for n in range(_LIST_LIMIT + 6))
+    text = message(b"GET / HTTP/1.1\r\n" + hosts + b"\r\n")
+    assert text.count("\n        Host: h") == _LIST_LIMIT
+    assert "(+6 more Host)\n" in text

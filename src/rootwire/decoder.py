@@ -172,6 +172,8 @@ def _classify_stop(
       tunnel-nesting bomb (next: Ethernet); those stay errors.
     - Any other error raised while decoding a best-effort class is a
       miss: the port suggested a protocol the payload does not hold.
+    - A stop before any layer decoded is always an error: the frame's
+      first header is not a port's guess.
     - Everything else is a genuine error.
 
     *best_effort* is the set of classes the rule applies to (see
@@ -179,6 +181,12 @@ def _classify_stop(
     """
     if error is None:
         return None, None
+    if not layers:
+        # Nothing decoded: the frame's own first header failed, which is
+        # always the frame's fault, whatever a --decode-as mapping made
+        # of the class (``udp.port=4000:Ethernet`` must not turn a runt
+        # frame into a miss).
+        return str(error), None
     if isinstance(error, MaxDepthExceededError):
         self_chaining = (
             error.protocol in best_effort

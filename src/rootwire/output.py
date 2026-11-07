@@ -1647,8 +1647,13 @@ class OutputToScreen(Output):
         HTTP messages. No accessor here raises."""
         self._print(f"{_I}[+] HTTP {_http_start_line(layer)}")
         for name in _HTTP_SHOWN_FIELDS:
-            for value in layer.header_values(name):
+            # Every occurrence up to the list limit, then a count: one
+            # head can repeat a field thousands of times.
+            values = layer.header_values(name)
+            for value in values[:_LIST_LIMIT]:
                 self._print(f"{_II}{name}: {_cut(_inline_text(value))}")
+            if (extra := len(values) - _LIST_LIMIT) > 0:
+                self._print(f"{_II}(+{extra} more {name})")
         names = [_cut(_inline_text(field.name)) for field in layer.fields]
         if names:
             self._print(f"{_II}Fields: {_capped(names)}")
@@ -2307,10 +2312,13 @@ def _frame_flow_key(frame: DecodedFrame) -> FlowKey | None:
         (layer for layer in tail if isinstance(layer, (TCP, UDP, SCTP))),
         None,
     )
-    if transport is None or any(isinstance(layer, Ethernet) for layer in tail):
+    if transport is None or any(
+        isinstance(layer, (VXLAN, Ethernet)) for layer in tail
+    ):
         # No transport, or one carrying a whole layer-2 frame (VXLAN's
-        # UDP around an inner ARP, which has no IP header of its own):
-        # a tunnel's underlay, not a conversation.
+        # UDP around an inner ARP, which has no IP header of its own, or
+        # around an inner frame too short to decode): a tunnel's
+        # underlay, not a conversation.
         return None
     ip, routing = _enclosing_ip(frame, transport)
     try:

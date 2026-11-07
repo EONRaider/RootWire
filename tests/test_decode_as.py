@@ -11,7 +11,7 @@ past its request.
 from __future__ import annotations
 
 import pytest
-from netprotocols import DHCP, DNS, HTTP, TFTP, UDP, DNSOverTCP, IPv4
+from netprotocols import DHCP, DNS, HTTP, TFTP, UDP, DNSOverTCP, Ethernet, IPv4
 from netprotocols.registry import DEFAULT, WITHHELD
 
 from conftest import FIXTURES, read_pcap
@@ -150,6 +150,19 @@ def test_a_typed_class_mapped_to_a_port_is_not_best_effort() -> None:
     left out."""
     options = decode_options({"udp.port": {4000: IPv4}})
     assert IPv4 not in options.best_effort
+
+
+def test_root_header_failure_stays_an_error() -> None:
+    """A frame whose first header fails is malformed, even when a mapping
+    made that header's class best-effort: a runt frame is not a port's
+    guess gone wrong."""
+    options = decode_options({"udp.port": {4000: Ethernet}})
+    assert Ethernet in options.best_effort
+    frame = decode_frame(
+        b"\x00" * 10, number=1, timestamp=0, interface=None, options=options
+    )
+    assert frame.error is not None
+    assert frame.l7_miss is None
 
 
 def test_dns_stays_out_of_the_best_effort_set() -> None:

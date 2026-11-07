@@ -115,7 +115,19 @@ def test_tracked_conversations_are_capped(monkeypatch) -> None:
     monkeypatch.setattr(output, "_FLOW_LIMIT", 2)
     text = summary("http/http.pcap")
     assert "[=] 2 conversations:\n" in text
-    assert "frames of conversations past the 2 tracked)" in text
+    # 98 frames, 22 of them in the two tracked connections: every one of
+    # the other 76 is counted, not each rejected conversation once.
+    assert "[=]   (+76 frames of conversations past the 2 tracked)" in text
     # The first two connections are tracked whole: 12 and 10 frames.
     assert "47212: 12 frames" in text
     assert "47216: 10 frames" in text
+
+
+def test_vxlan_with_a_truncated_inner_frame_has_no_conversation() -> None:
+    """VXLAN whose inner Ethernet header is cut short ends the walk at
+    VXLAN; its outer UDP is still an underlay, not a conversation."""
+    data = read_pcap(FIXTURES / "vxlan.pcap")[6]
+    start = data.index(bytes.fromhex("0800000012345600")) + 8
+    frame = decode(data[: start + 6])
+    assert type(frame.layers[-1]).__name__ == "VXLAN"
+    assert _frame_flow_key(frame) is None
