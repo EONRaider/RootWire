@@ -255,7 +255,7 @@ def _enclosing_ip(
     redirects its pseudo-header, if any.
 
     The IP header is the *nearest* one before *layer* — the inner one
-    in a tunnel (IP-in-IP, GRE, VXLAN, AH/ESP tunnel mode), not the
+    in a tunnel (IP-in-IP, GRE, VXLAN, AH tunnel mode), not the
     outermost: an inner TCP/UDP checksum is computed over the inner
     datagram's pseudo-header, so verifying it against the outer IP's
     addresses flags a false mismatch on every tunnelled segment.
@@ -2287,9 +2287,11 @@ def _frame_flow_key(frame: DecodedFrame) -> FlowKey | None:
     :func:`netprotocols.flow.flow_key`, the same for both directions,
     with the Routing header in between applied (see
     :func:`_enclosing_ip`). A tunnelled frame therefore counts towards
-    the conversation inside the tunnel -- IP-in-IP, GRE, AH or ESP
-    tunnel mode, VXLAN -- and a frame whose innermost datagram carries
-    no transport (an ICMP echo, inside a VXLAN tunnel or not) has none,
+    the conversation inside the tunnel -- IP-in-IP, GRE, AH tunnel mode,
+    VXLAN; ESP encrypts its inner datagram, so the walk ends there and
+    an ESP frame has no conversation -- and a frame whose innermost
+    datagram carries no transport (an ICMP echo, inside a VXLAN tunnel
+    or not) has none,
     rather than being counted under the tunnel's underlay flow -- nor
     does a transport that carries a whole Ethernet frame, as VXLAN's UDP
     does around an inner ARP, which has no IP header to key.

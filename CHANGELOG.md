@@ -299,7 +299,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are no longer emitted.
 - **False checksum mismatches inside tunnels.** TCP/UDP/ICMP checksums
   were verified against the *outermost* IP header, which is wrong for
-  every tunnelled segment (VXLAN, GRE, IP-in-IP, AH/ESP tunnel mode):
+  every tunnelled segment (VXLAN, GRE, IP-in-IP, AH tunnel mode):
   the corpus' inner UDP in VXLAN and TCP behind AH tunnel mode both
   read as mismatches. They now use the nearest enclosing IP header,
   as `Packet.with_checksums()` does.

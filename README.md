@@ -61,7 +61,7 @@ network delivers.
 | Routing | PIM v2 | Hello options, Register, Register-Stop, Join/Prune groups and sources, Assert |
 | Redundancy | VRRP v2/v3, HSRP | virtual router or group, priority (resignation and address owner named), virtual addresses, timers, clear-text authentication |
 | Application | DNS (UDP and TCP), DHCP | every question and answer with decoded RDATA; DHCP message type, client MAC, addresses, options |
-| Application | TLS | one line per record; a ClientHello's version, **SNI**, cipher-suite count and extensions, even when it spans two segments |
+| Application | TLS | one line per record; a ClientHello's version, **SNI**, cipher-suite count and extensions — or, for a ClientHello split across segments (never reassembled), the SNI alone, when its first segment holds it |
 | Application | NTP | mode, stratum, Reference ID or kiss code, timestamps, extension fields, MAC |
 | Application | TFTP | the request's filename, mode and options; DATA/ACK blocks; ERROR code and message; OACK options |
 | Application | RADIUS | code, identifier, Authenticator, User-Name and the other text attributes, addresses and numbers (passwords by size only) |
@@ -205,7 +205,9 @@ Everything a sender chose — names, passwords, free text, HTTP fields,
 library diagnostics quoting wire bytes — is escaped before it reaches
 the terminal (control and format characters, ESC and bidi overrides
 among them, show as `\xNN` or `\uXXXX`), kept on one line and cut at
-128 characters; lists stop at 16 items with `(+N more)`. `-d` adds each
+128 characters; a one-line list (chunks, options, attributes, header
+fields) stops at 16 items with `(+N more)`, while DNS shows every
+question and answer on its own line. `-d` adds each
 frame's undecoded payload, sanitized the same way.
 
 ## Machine-readable output
@@ -260,8 +262,10 @@ counts, and the ten largest conversations by bytes:
 
 A conversation is a TCP, UDP or SCTP flow, both directions together.
 It is the *innermost* IP datagram's, so tunnelled traffic (IP-in-IP,
-GRE, AH or ESP tunnel mode, VXLAN) counts under the conversation inside
-the tunnel, and a VXLAN underlay never counts as one. At most 65,536
+GRE, AH tunnel mode, VXLAN) counts under the conversation inside the
+tunnel, and a VXLAN underlay never counts as one. ESP encrypts what it
+carries, so the decode stops at ESP: no inner conversation is visible,
+and an ESP frame counts under none. At most 65,536
 conversations are tracked — a spoofed flood mints one per frame — and
 frames of any past that are counted as untracked.
 
