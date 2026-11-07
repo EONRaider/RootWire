@@ -16,7 +16,9 @@ SCHEMA_KEYS = {
     "truncated",
     "malformed_length",
     "error",
+    "l7_miss",
     "payload_len",
+    "trailer_len",
     "layers",
 }
 

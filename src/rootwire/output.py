@@ -11,11 +11,15 @@ instead of raising: display helpers must never kill a capture.
 from __future__ import annotations
 
 import dataclasses
+import enum
+import ipaddress
 import json
 import sys
 import time
 from abc import ABC, abstractmethod
 from collections import Counter
+from collections.abc import Iterator
+from contextlib import contextmanager
 from functools import singledispatchmethod
 from typing import IO, Any, cast
 
@@ -32,7 +36,6 @@ from netprotocols import (
     Ethernet,
     ICMPv4,
     ICMPv6,
-    InvalidFieldError,
     IPv4,
     IPv4Option,
     IPv6,
@@ -41,6 +44,7 @@ from netprotocols import (
     IPv6HopByHopOptions,
     IPv6Routing,
     Protocol,
+    ProtocolError,
     TCPOption,
     compute,
     verify,
@@ -106,43 +110,164 @@ def _format_option(option: IPv4Option | TCPOption) -> str:
     return f"{option.kind_name} ({value})"
 
 
-def _trailing_bytes(frame: DecodedFrame, layer: Protocol) -> bytes:
-    """The bytes that followed *layer* on the wire, whether or not
-    anything after it was itself decoded into a further layer —
-    reconstructed from the frame's own raw capture rather than
-    re-serializing subsequent layers, so it is exact regardless of
-    chain depth. Equal to ``frame.payload`` when *layer* is the last
-    decoded layer."""
-    cursor = 0
-    for candidate in frame.layers:
-        cursor += candidate.header_len
+def _offset_of(frame: DecodedFrame, layer: Protocol) -> tuple[int, int]:
+    """``(index, offset)`` of *layer* in *frame*: its position in
+    ``frame.layers`` and the frame offset its header starts at, the sum
+    of every preceding header's ``header_len``."""
+    offset = 0
+    for index, candidate in enumerate(frame.layers):
         if candidate is layer:
-            return frame.raw[cursor:]
-    return frame.payload  # pragma: no cover -- layer is always in frame.layers
+            return index, offset
+        offset += candidate.header_len
+    raise ValueError("layer is not in frame.layers")  # pragma: no cover
 
 
-def _is_fragmented(frame: DecodedFrame) -> bool:
-    """Whether this frame is a non-reassembled IP fragment.
+def _declared_end(frame: DecodedFrame, layer: Protocol) -> int:
+    """Where the bytes that belong to *layer* end, by the length fields
+    of the headers that enclose it, *layer* itself included.
 
-    A transport-layer checksum (ICMP/TCP/UDP) covers the *reassembled*
-    datagram; RootWire never reassembles fragments (each renders
-    independently, labeled "first fragment" / "fragment at offset N").
-    Verifying one against a single fragment's bytes would disagree with
-    the wire checksum every time — correctly, but for a reason that has
-    nothing to do with the checksum being wrong, so callers use this to
-    suppress that check rather than flag a false mismatch.
+    That is the tightest of: each enclosing IPv4 header's Total Length,
+    IPv6 header's Payload Length, UDP header's Length and Ethernet/VLAN
+    IEEE 802.3 Length (a type/length value of 1500 or less), each
+    measured from that header's own offset, and the end of the capture.
+    It is the bound NETProtocols' walk handed *layer*'s decoder, plus
+    *layer*'s own length when it has one (a UDP checksum covers exactly
+    ``length`` bytes). A zero, or a value shorter than its own header,
+    bounds nothing, as in the walk.
+
+    Computed per layer on purpose. ``frame.trailer`` is the bytes past
+    the *tightest* end anywhere in the frame, which in a tunnel is the
+    inner datagram's: an inner Ethernet frame's padding inside VXLAN is
+    trailer, yet it is part of the outer UDP datagram and its checksum.
     """
-    ipv4 = frame.layer(IPv4)
-    if ipv4 is not None and (ipv4.flags & 0b001 or ipv4.fragment_offset > 0):
-        return True
-    return any(isinstance(layer, IPv6Fragment) for layer in frame.layers)
+    index, _ = _offset_of(frame, layer)
+    end = len(frame.raw)
+    offset = 0
+    for candidate in frame.layers[: index + 1]:
+        extent = _length_extent(candidate)
+        if extent is not None:
+            end = min(end, offset + extent)
+        offset += candidate.header_len
+    return end
+
+
+def _length_extent(layer: Protocol) -> int | None:
+    """How many bytes, from its own start, *layer*'s length field says
+    belong to it, or ``None`` if it has no such field or the value
+    bounds nothing: 0 (TSO's IPv4 sentinel, IPv6 jumbograms, UDP over
+    IPv6 jumbograms) or less than the header itself."""
+    if isinstance(layer, IPv4):
+        valid = layer.total_length >= layer.header_len
+        return layer.total_length if valid else None
+    if isinstance(layer, IPv6):
+        bounded = layer.payload_length > 0
+        return layer.header_len + layer.payload_length if bounded else None
+    if isinstance(layer, UDP):
+        return layer.length if layer.length >= layer.header_len else None
+    if isinstance(layer, Ethernet | VLAN) and 0 < layer.ethertype <= 1500:
+        # An IEEE 802.3 Length rather than an EtherType.
+        return layer.header_len + layer.ethertype
+    return None
+
+
+def _trailing_bytes(frame: DecodedFrame, layer: Protocol) -> bytes:
+    """The bytes that followed *layer* on the wire, up to its declared
+    end (see :func:`_declared_end`), whether or not anything after it was
+    itself decoded into a further layer — reconstructed from the frame's
+    own raw capture rather than re-serializing subsequent layers, so it
+    is exact regardless of chain depth.
+
+    Ending at the declared end keeps Ethernet padding and a captured FCS
+    out of a checksum that never covered them: a TCP or ICMPv6 checksum
+    sums the segment's length as ``header_len + len(payload)``, so six
+    bytes of padding behind a 54-byte bare ACK would otherwise read as a
+    mismatch on perfectly good traffic.
+    """
+    index, offset = _offset_of(frame, layer)
+    start = offset + frame.layers[index].header_len
+    return frame.raw[start : max(start, _declared_end(frame, layer))]
+
+
+def _enclosing_ip(
+    frame: DecodedFrame, layer: Protocol
+) -> tuple[IPv4 | IPv6 | None, IPv6Routing | None]:
+    """The IP header enclosing *layer*, and the Routing header that
+    redirects its pseudo-header, if any.
+
+    The IP header is the *nearest* one before *layer* — the inner one
+    in a tunnel (IP-in-IP, GRE, VXLAN, AH/ESP tunnel mode), not the
+    outermost: an inner TCP/UDP checksum is computed over the inner
+    datagram's pseudo-header, so verifying it against the outer IP's
+    addresses flags a false mismatch on every tunnelled segment.
+
+    The Routing header is the last :class:`~netprotocols.IPv6Routing`
+    between that IP header and *layer* with ``segments_left`` above 0:
+    behind one, the pseudo-header carries the route's final destination
+    rather than the next hop in ``IPv6.dst`` (RFC 8200 §8.1), and a
+    Routing header that has no segments left is already at its final
+    destination. Both rules mirror NETProtocols'
+    :meth:`~netprotocols.Packet.with_checksums`, so RootWire verifies a
+    checksum exactly the way the library would fill it in.
+    """
+    index, _ = _offset_of(frame, layer)
+    routing: IPv6Routing | None = None
+    for candidate in reversed(frame.layers[:index]):
+        if isinstance(candidate, (IPv4, IPv6)):
+            return candidate, routing
+        if (
+            routing is None
+            and isinstance(candidate, IPv6Routing)
+            and candidate.segments_left > 0
+        ):
+            routing = candidate
+    return None, None
+
+
+def _is_fragmented(frame: DecodedFrame, layer: Protocol) -> bool:
+    """Whether *layer* sits inside a non-reassembled IP fragment.
+
+    A transport-layer checksum (ICMP/TCP/UDP/IGMP/GRE) covers the
+    *reassembled* datagram; RootWire never reassembles fragments (each
+    renders independently, labeled "first fragment" / "fragment at
+    offset N"). Verifying one against a single fragment's bytes would
+    disagree with the wire checksum every time — correctly, but for a
+    reason that has nothing to do with the checksum being wrong, so
+    callers use this to suppress that check rather than flag a false
+    mismatch.
+
+    Only the headers *enclosing* *layer* count: an IPv4 header with More
+    Fragments set or a nonzero Fragment Offset, or an IPv6 Fragment
+    header, anywhere before it. An inner tunnelled datagram's
+    fragmentation therefore suppresses its own checksums but not the
+    outer UDP's, and a fragmented inner IPv4 is caught even when the
+    outer one is whole.
+    """
+    index, _ = _offset_of(frame, layer)
+    for candidate in frame.layers[:index]:
+        if isinstance(candidate, IPv6Fragment):
+            return True
+        if isinstance(candidate, IPv4) and (
+            candidate.flags & 0b001 or candidate.fragment_offset > 0
+        ):
+            return True
+    return False
 
 
 def _checksum_note(
-    layer: Protocol, *, ip: IPv4 | IPv6 | None = None, payload: bytes = b""
+    layer: Protocol,
+    *,
+    ip: IPv4 | IPv6 | None = None,
+    routing: IPv6Routing | None = None,
+    payload: bytes = b"",
 ) -> str:
     """A trailing ``" [!] mismatch (expected 0xXXXX)"`` note for a
     checksum display line, or ``""`` when it verifies.
+
+    *ip* and *routing* are the layer's enclosing headers (see
+    :func:`_enclosing_ip`); *payload* is what follows it on the wire
+    (see :func:`_trailing_bytes`). Given *ip*, NETProtocols ends an
+    IGMP, ICMPv4 or GRE checksum at that datagram's declared end, so
+    padding a layer decoded on its own never reaches the sum.
 
     Never raises: a checksum this helper cannot compute (most notably,
     a required enclosing IP layer this frame doesn't have) is treated
@@ -150,12 +275,37 @@ def _checksum_note(
     false positive over its own inability to check.
     """
     try:
-        if verify(layer, ip=ip, payload=payload):
+        if verify(layer, ip=ip, routing=routing, payload=payload):
             return ""
-        expected = compute(layer, ip=ip, payload=payload)
-    except InvalidFieldError:
+        expected = compute(layer, ip=ip, routing=routing, payload=payload)
+    except ProtocolError:
         return ""
     return f" [!] mismatch (expected {expected:#06x})"
+
+
+def _transport_checksum_note(frame: DecodedFrame, layer: Protocol) -> str:
+    """:func:`_checksum_note` for a layer whose checksum covers what
+    follows it (TCP, UDP), with its enclosing IP and Routing headers;
+    ``""`` for a non-reassembled fragment (see :func:`_is_fragmented`)."""
+    if _is_fragmented(frame, layer):
+        return ""
+    ip, routing = _enclosing_ip(frame, layer)
+    return _checksum_note(
+        layer, ip=ip, routing=routing, payload=_trailing_bytes(frame, layer)
+    )
+
+
+def _lying_ipv4(frame: DecodedFrame) -> IPv4 | None:
+    """The IPv4 header whose ``total_length`` is shorter than itself,
+    the one ``frame.malformed_length`` reports: always the last IPv4
+    header decoded, outer or tunnelled, since the walk stops there."""
+    for layer in reversed(frame.layers):
+        if (
+            isinstance(layer, IPv4)
+            and 0 < layer.total_length < layer.header_len
+        ):
+            return layer
+    return None
 
 
 class Output(ABC):
@@ -190,7 +340,30 @@ class OutputToScreen(Output):
     def _print(self, text: str) -> None:
         print(text, file=self._stream)
 
+    @contextmanager
+    def _guard(self, what: str) -> Iterator[None]:
+        """Contain a malformed on-demand section of a layer.
+
+        Several layers parse part of themselves lazily, on first access
+        of a property (DNS records, DHCP/TCP/IPv4 options, IGMP group
+        records, NDP options, ...), so a structurally valid header can
+        still raise from a renderer. Inside ``with self._guard("X"):``
+        a :class:`~netprotocols.ProtocolError` ends the block, prints
+        ``[!] X malformed: <reason>`` and rendering carries on with the
+        next line or layer; whatever the block printed before the fault
+        stays printed. Only ``ProtocolError`` is contained: anything
+        else is a RootWire bug and should surface as one.
+        """
+        try:
+            yield
+        except ProtocolError as error:
+            reason = _sanitize_for_terminal(str(error))
+            self._print(f"{_II}[!] {what} malformed: {reason}")
+
     def update(self, frame: DecodedFrame) -> None:
+        """Render one frame: a header line, every layer through its
+        registered renderer, the frame-level diagnostics, and (with
+        ``display_payload``) the sanitized undecoded payload."""
         local_time = time.strftime(
             "%H:%M:%S", time.localtime(frame.timestamp / 1_000_000_000)
         )
@@ -201,23 +374,45 @@ class OutputToScreen(Output):
         )
         for layer in frame.layers:
             self._render(layer, frame)
-        if frame.error is not None:
-            self._print(f"{_I}[!] Malformed header: {frame.error}")
-        if frame.truncated:
-            self._print(
-                f"{_I}[!] Truncated: the IP datagram declares more bytes "
-                f"than were captured"
-            )
-        if frame.malformed_length and (ip := frame.layer(IPv4)) is not None:
-            self._print(
-                f"{_I}[!] Malformed: IPv4 total_length ({ip.total_length}) "
-                f"is smaller than its header ({ip.header_len} bytes)"
-            )
+        self._render_diagnostics(frame)
         if self._display_payload and frame.payload:
             text = _sanitize_for_terminal(frame.payload.decode(errors="ignore"))
             self._print(f"{_I}[+] Payload ({len(frame.payload)} bytes):")
             self._print(f"{_II}{text.replace(chr(10), chr(10) + _II)}")
         self._print("")
+
+    def _render_diagnostics(self, frame: DecodedFrame) -> None:
+        """The frame-level ``[!]``/``[~]`` lines that follow its layers:
+        a decode error, a best-effort application miss, truncation, and
+        a lying IPv4 length. Prints nothing for a healthy frame."""
+        # A lying IPv4 total_length is reported once, by the specific
+        # line below: the walk's own error for it is the same fault
+        # (see DecodedFrame.malformed_length). Library messages can quote
+        # wire bytes, so they are sanitized like any other wire text.
+        if frame.error is not None and not frame.malformed_length:
+            self._print(
+                f"{_I}[!] Malformed header: "
+                f"{_sanitize_for_terminal(frame.error)}"
+            )
+        if frame.l7_miss is not None and frame.payload:
+            # Informational, not a [!]: see DecodedFrame.l7_miss. Shown
+            # only when there are undecoded bytes to explain -- a bare
+            # ACK on port 443 has nothing to say.
+            self._print(
+                f"{_I}[~] Payload left undecoded: "
+                f"{_sanitize_for_terminal(frame.l7_miss)}"
+            )
+        if frame.truncated:
+            self._print(
+                f"{_I}[!] Truncated: the IP datagram declares more bytes "
+                f"than were captured"
+            )
+        if frame.malformed_length and (ip := _lying_ipv4(frame)) is not None:
+            self._print(
+                f"{_I}[!] Malformed: IPv4 total_length ({ip.total_length}) "
+                f"is smaller than its header ({ip.header_len} bytes); "
+                f"upper layers not decoded"
+            )
 
     @singledispatchmethod
     def _render(self, layer: Protocol, frame: DecodedFrame) -> None:
@@ -293,15 +488,12 @@ class OutputToScreen(Output):
         for a header carrying no options."""
         if not layer.options:
             return
-        try:
+        with self._guard("Options"):
             options = layer.parsed_options
-        except InvalidFieldError as error:
-            self._print(f"{_II}[!] Options malformed: {error}")
-            return
-        self._print(
-            f"{_II}Options: "
-            + ", ".join(_format_option(option) for option in options)
-        )
+            self._print(
+                f"{_II}Options: "
+                + ", ".join(_format_option(option) for option in options)
+            )
 
     @_render.register
     def _(self, layer: IPv6Routing, frame: DecodedFrame) -> None:
@@ -328,10 +520,23 @@ class OutputToScreen(Output):
 
     @_render.register
     def _(self, layer: GRE, frame: DecodedFrame) -> None:
+        """GRE: the encapsulated protocol and which optional fields are
+        present, with the checksum verified (over the datagram up to its
+        IP header's declared end) when the Checksum-Present bit is set."""
         self._print(f"{_I}[+] GRE (protocol: {layer.protocol_name})")
         optional = []
         if layer.checksum_present:
-            optional.append(f"Checksum: {layer.checksum_hex_str}")
+            ip, _ = _enclosing_ip(frame, layer)
+            note = (
+                ""
+                if _is_fragmented(frame, layer)
+                else _checksum_note(
+                    layer,
+                    ip=ip,
+                    payload=_trailing_bytes(frame, layer),
+                )
+            )
+            optional.append(f"Checksum: {layer.checksum_hex_str}{note}")
         if layer.key_present:
             optional.append(f"Key: {layer.key:#010x}")
         if layer.sequence_present:
@@ -342,25 +547,29 @@ class OutputToScreen(Output):
 
     @_render.register
     def _(self, layer: IGMP, frame: DecodedFrame) -> None:
+        """IGMP: message type, Max Resp Code and verified checksum, then
+        the group (v1/v2 report, leave, query) or every v3 group record,
+        parsed lazily inside a guard."""
         self._print(f"{_I}[+] IGMP {layer.type_name}")
+        ip, _ = _enclosing_ip(frame, layer)
+        note = (
+            "" if _is_fragmented(frame, layer) else _checksum_note(layer, ip=ip)
+        )
         self._print(
             f"{_II}Max Resp Code: {layer.max_resp_code} | "
-            f"Checksum: {layer.checksum_hex_str}"
+            f"Checksum: {layer.checksum_hex_str}{note}"
         )
-        try:
+        with self._guard("Body"):
             group_address = layer.group_address
             records = layer.group_records
-        except InvalidFieldError as error:
-            self._print(f"{_II}[!] Body malformed: {error}")
-            return
-        if group_address is not None:
-            self._print(f"{_II}Group: {group_address}")
-        for record in records or ():
-            sources = ", ".join(record.source_addresses) or "none"
-            self._print(
-                f"{_II}Record: {record.record_type_name} "
-                f"{record.multicast_address} (sources: {sources})"
-            )
+            if group_address is not None:
+                self._print(f"{_II}Group: {group_address}")
+            for record in records or ():
+                sources = ", ".join(record.source_addresses) or "none"
+                self._print(
+                    f"{_II}Record: {record.record_type_name} "
+                    f"{record.multicast_address} (sources: {sources})"
+                )
 
     @_render.register
     def _(self, layer: ICMPv4, frame: DecodedFrame) -> None:
@@ -373,18 +582,27 @@ class OutputToScreen(Output):
     def _render_icmp(
         self, layer: ICMPv4 | ICMPv6, frame: DecodedFrame, *, version: int
     ) -> None:
-        ip: IPv4 | IPv6 | None
-        ip = frame.layer(IPv4) if version == 4 else frame.layer(IPv6)
+        """Shared ICMPv4/ICMPv6 rendering: the enclosing route, type/code
+        and a checksum verified against the nearest IP header (plus any
+        Routing header), then Neighbor Discovery detail for ICMPv6."""
+        ip, routing = _enclosing_ip(frame, layer)
         route = f" {ip.src} -> {ip.dst}" if ip is not None else ""
         self._print(f"{_I}[+] ICMPv{version}{route}")
-        # No pseudo-header for ICMPv4 (compute() ignores ip there); the
-        # ICMPv6 pseudo-header needs the enclosing IPv6 layer. Skipped
+        # The ICMPv6 pseudo-header needs the enclosing IPv6 layer (and
+        # the final destination behind a Routing header); ICMPv4 has no
+        # pseudo-header, but given its IP the library ends the sum at
+        # the datagram's declared end, keeping padding out. Skipped
         # entirely for a fragment: the checksum covers the reassembled
         # message, which this single fragment's bytes never match.
         note = (
             ""
-            if _is_fragmented(frame)
-            else _checksum_note(layer, ip=ip if version == 6 else None)
+            if _is_fragmented(frame, layer)
+            else _checksum_note(
+                layer,
+                ip=ip,
+                routing=routing,
+                payload=_trailing_bytes(frame, layer),
+            )
         )
         self._print(
             f"{_II}Type: {layer.type} ({layer.type_name}) | "
@@ -401,19 +619,15 @@ class OutputToScreen(Output):
         target = layer.ndp_target_address
         if target is not None:
             self._print(f"{_II}Target: {target}")
-        try:
-            options = layer.ndp_options
-        except InvalidFieldError as error:
-            self._print(f"{_II}[!] NDP options malformed: {error}")
-            return
-        for option in options or ():
-            detail = option.link_layer_address or (
-                option.data.hex() if option.data else ""
-            )
-            self._print(
-                f"{_II}Option: {option.type_name}"
-                + (f" ({detail})" if detail else "")
-            )
+        with self._guard("NDP options"):
+            for option in layer.ndp_options or ():
+                detail = option.link_layer_address or (
+                    option.data.hex() if option.data else ""
+                )
+                self._print(
+                    f"{_II}Option: {option.type_name}"
+                    + (f" ({detail})" if detail else "")
+                )
 
     @_render.register
     def _(self, layer: TCP, frame: DecodedFrame) -> None:
@@ -422,14 +636,7 @@ class OutputToScreen(Output):
             f"{_II}Flags: {layer.flags_hex_str} ({layer.flags_str}) | "
             f"Seq: {layer.seq} | Ack: {layer.ack}"
         )
-        ip = frame.layer(IPv4) or frame.layer(IPv6)
-        note = (
-            ""
-            if _is_fragmented(frame)
-            else _checksum_note(
-                layer, ip=ip, payload=_trailing_bytes(frame, layer)
-            )
-        )
+        note = _transport_checksum_note(frame, layer)
         self._print(
             f"{_II}Window: {layer.window} | "
             f"Checksum: {layer.checksum_hex_str}{note}"
@@ -439,14 +646,7 @@ class OutputToScreen(Output):
     @_render.register
     def _(self, layer: UDP, frame: DecodedFrame) -> None:
         self._print(f"{_I}[+] UDP {layer.src_port} -> {layer.dst_port}")
-        ip = frame.layer(IPv4) or frame.layer(IPv6)
-        note = (
-            ""
-            if _is_fragmented(frame)
-            else _checksum_note(
-                layer, ip=ip, payload=_trailing_bytes(frame, layer)
-            )
-        )
+        note = _transport_checksum_note(frame, layer)
         self._print(
             f"{_II}Length: {layer.length} | "
             f"Checksum: {layer.checksum_hex_str}{note}"
@@ -454,27 +654,28 @@ class OutputToScreen(Output):
 
     @_render.register
     def _(self, layer: DNS, frame: DecodedFrame) -> None:
+        """DNS: direction, transaction ID, flags/opcode/RCODE and every
+        question and answer, names and RDATA sanitized; the records are
+        parsed lazily, so they render inside a guard."""
         direction = "response" if layer.qr else "query"
         self._print(f"{_I}[+] DNS {direction} (id {layer.transaction_id:#06x})")
         self._print(
             f"{_II}Flags: {layer.flags_hex_str} | Opcode: {layer.opcode} | "
             f"RCODE: {layer.rcode}"
         )
-        try:
+        with self._guard("Records"):
             questions = layer.questions
             answers = layer.answers
-        except InvalidFieldError as error:
-            self._print(f"{_II}[!] Records malformed: {error}")
-            return
-        for question in questions:
-            name = _sanitize_for_terminal(question.name)
-            self._print(f"{_II}Q: {name} (type {question.qtype})")
-        for answer in answers:
-            name = _sanitize_for_terminal(answer.name)
-            rdata = _sanitize_for_terminal(answer.rdata_text)
-            self._print(
-                f"{_II}A: {name} {answer.rtype_name} {answer.ttl}s -> {rdata}"
-            )
+            for question in questions:
+                name = _sanitize_for_terminal(question.name)
+                self._print(f"{_II}Q: {name} (type {question.qtype})")
+            for answer in answers:
+                name = _sanitize_for_terminal(answer.name)
+                rdata = _sanitize_for_terminal(answer.rdata_text)
+                self._print(
+                    f"{_II}A: {name} {answer.rtype_name} {answer.ttl}s "
+                    f"-> {rdata}"
+                )
 
     @_render.register
     def _(self, layer: DNSOverTCP, frame: DecodedFrame) -> None:
@@ -485,9 +686,12 @@ class OutputToScreen(Output):
 
     @_render.register
     def _(self, layer: DHCP, frame: DecodedFrame) -> None:
+        """DHCP: message type (falling back to BOOTP op), client MAC and
+        XID, the four address fields, and a parsed-option count, the
+        options guarded since they parse on demand."""
         try:
             message_type = layer.message_type_name
-        except InvalidFieldError:
+        except ProtocolError:
             # message_type_name and parsed_options both read the same
             # underlying option_map, so a malformed options section
             # raises identically from either -- falling back silently
@@ -501,12 +705,8 @@ class OutputToScreen(Output):
             f"{_II}Client Addr: {layer.ciaddr} | Your Addr: {layer.yiaddr} | "
             f"Server Addr: {layer.siaddr} | Gateway Addr: {layer.giaddr}"
         )
-        try:
-            option_count = len(layer.parsed_options)
-        except InvalidFieldError as error:
-            self._print(f"{_II}[!] Options malformed: {error}")
-        else:
-            if option_count:
+        with self._guard("Options"):
+            if option_count := len(layer.parsed_options):
                 self._print(f"{_II}Options: {option_count} parsed")
 
     @_render.register
@@ -535,16 +735,75 @@ class OutputToPcap(Output):
         self._writer.close()
 
 
-def _json_safe(value: Any) -> Any:
-    return value.hex() if isinstance(value, bytes) else value
+def _json_default(value: Any) -> Any:
+    """``json.dumps`` fallback for the values a layer's fields hold.
+
+    ``dataclasses.asdict`` recurses into nested dataclasses, lists and
+    tuples, so a non-JSON value can sit at any depth: LLDP's and CDP's
+    TLV tuples hold raw ``bytes`` values two levels down, for example,
+    and LLDP is decoded by default (EtherType 0x88CC). ``json.dumps``
+    calls this hook at whatever depth it meets such a value, which a
+    top-level-only conversion cannot do.
+
+    - ``bytes``/``bytearray``/``memoryview`` → lowercase hex, as at the
+      top level before.
+    - An :class:`enum.Enum` → its ``value`` (an ``IntEnum`` already
+      encodes as its int and never reaches here).
+    - ``ipaddress`` objects → their string form.
+    - ``set``/``frozenset`` → a sorted list, for stable output.
+    - Anything else → ``str(value)``: an output must never kill a
+      capture over a field type a future NETProtocols release adds.
+    """
+    if isinstance(value, bytes | bytearray | memoryview):
+        return bytes(value).hex()
+    if isinstance(value, enum.Enum):
+        return value.value
+    if isinstance(
+        value,
+        ipaddress.IPv4Address
+        | ipaddress.IPv6Address
+        | ipaddress.IPv4Network
+        | ipaddress.IPv6Network,
+    ):
+        return str(value)
+    if isinstance(value, set | frozenset):
+        return sorted(value, key=repr)
+    return str(value)
+
+
+def _layer_record(layer: Protocol) -> dict[str, Any]:
+    """One layer as a JSON-ready mapping: ``"type"`` (the class name)
+    first, then the dataclass fields.
+
+    ``"type"`` is the record's discriminator, so it always holds the
+    class name. A layer with a wire field of its own called ``type``
+    (ICMPv4/ICMPv6, IGMP, BGP, OSPF, PIM, VRRP) emits that field as
+    ``"type_"`` instead; spreading the fields over the discriminator
+    used to replace ``"ICMPv4"`` with the message type number.
+    Underscored fields are decode context the library keeps beside the
+    wire fields (BGP's ``_followed``), not data, and are left out.
+    """
+    # Every concrete Protocol is a dataclass; the ABC itself is not,
+    # hence the cast.
+    fields = dataclasses.asdict(cast(Any, layer))
+    record: dict[str, Any] = {"type": type(layer).__name__}
+    for key, value in fields.items():
+        if key.startswith("_"):
+            continue
+        record["type_" if key == "type" else key] = value
+    return record
 
 
 class OutputToNDJSON(Output):
     """Emit one JSON object per frame, newline-delimited.
 
-    Layer fields come straight from the dataclasses (bytes values
-    hex-encoded); the raw payload is deliberately omitted — its length
-    is reported as ``payload_len``. Lines are flushed as they are
+    Layer fields come straight from the dataclasses, nested values
+    included (``bytes`` hex-encoded at any depth; see
+    :func:`_json_default`); the raw payload is deliberately omitted —
+    its length is reported as ``payload_len``, and the frame's trailer
+    (padding, FCS) as ``trailer_len``. ``l7_miss`` carries the reason a
+    port-dispatched application decoder declined the payload, or
+    ``null``. Lines are flushed as they are
     written so the output pipes cleanly into consumers like ``jq``.
 
     :param stream: Destination stream; defaults to stdout.
@@ -554,6 +813,8 @@ class OutputToNDJSON(Output):
         self._stream = stream if stream is not None else sys.stdout
 
     def update(self, frame: DecodedFrame) -> None:
+        """Serialize *frame* as one compact JSON object and flush it, so a
+        downstream consumer such as ``jq`` sees each frame as it arrives."""
         record = {
             "number": frame.number,
             "timestamp": frame.timestamp,
@@ -562,24 +823,13 @@ class OutputToNDJSON(Output):
             "truncated": frame.truncated,
             "malformed_length": frame.malformed_length,
             "error": frame.error,
+            "l7_miss": frame.l7_miss,
             "payload_len": len(frame.payload),
-            "layers": [
-                {
-                    "type": type(layer).__name__,
-                    **{
-                        key: _json_safe(value)
-                        # Every concrete Protocol is a dataclass; the
-                        # ABC itself is not, hence the cast.
-                        for key, value in dataclasses.asdict(
-                            cast(Any, layer)
-                        ).items()
-                    },
-                }
-                for layer in frame.layers
-            ],
+            "trailer_len": len(frame.trailer),
+            "layers": [_layer_record(layer) for layer in frame.layers],
         }
         print(
-            json.dumps(record, separators=(",", ":")),
+            json.dumps(record, separators=(",", ":"), default=_json_default),
             file=self._stream,
             flush=True,
         )

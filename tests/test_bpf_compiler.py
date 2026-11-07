@@ -368,6 +368,22 @@ def _decoded_ground_truth(frame: bytes):
     return decode_frame(frame, number=1, timestamp=0, interface=None)
 
 
+def _untagged_l3(frame: bytes):
+    """The layer directly behind the outer Ethernet header, or ``None``.
+
+    That is the only header a classic BPF primitive inspects: the
+    compiled program reads the EtherType at offset 12 and the IP header
+    at offset 14, exactly as tcpdump's own ``ip``/``arp``/``tcp`` do
+    without a ``vlan`` or ``mpls`` qualifier. The decoder, since
+    NETProtocols 2.3, also finds IPv4/ARP *inside* VLAN tags, LLC/SNAP,
+    MPLS stacks and VXLAN/GRE/IP-in-IP tunnels; ``decoded.layer(IPv4)``
+    would return that inner header, which no BPF filter of this grammar
+    is meant to match, so ground truth reads ``layers[1]`` alone.
+    """
+    layers = _decoded_ground_truth(frame).layers
+    return layers[1] if len(layers) > 1 else None
+
+
 class TestCrossCheckAgainstTheDecoder:
     """A second, independent oracle for the primitives simple enough to
     derive ground truth from the project's own (separately, extensively
@@ -394,14 +410,14 @@ class TestCrossCheckAgainstTheDecoder:
     def test_tcp_udp_matches_ip_protocol_number_in_both_stacks(
         self, expr, proto_number
     ):
+        """tcp/udp match the protocol number of the IP header directly behind
+        Ethernet, over IPv4 and IPv6 alike, on every corpus frame."""
         program = compile_expression(expr)
         for frame in _CORPUS_FRAMES:
-            decoded = _decoded_ground_truth(frame)
-            ip = decoded.layer(IPv4)
-            ip6 = decoded.layer(IPv6)
-            expected = (ip is not None and ip.protocol == proto_number) or (
-                ip6 is not None and ip6.next_header == proto_number
-            )
+            l3 = _untagged_l3(frame)
+            expected = (
+                isinstance(l3, IPv4) and l3.protocol == proto_number
+            ) or (isinstance(l3, IPv6) and l3.next_header == proto_number)
             actual = bool(vm_run(program, frame))
             assert actual == expected, (
                 f"{expr!r} {'accepted' if actual else 'rejected'} a frame "
@@ -414,9 +430,8 @@ class TestCrossCheckAgainstTheDecoder:
         grammar (no icmp6 keyword) -- and in tcpdump itself."""
         program = compile_expression("icmp")
         for frame in _CORPUS_FRAMES:
-            decoded = _decoded_ground_truth(frame)
-            ip = decoded.layer(IPv4)
-            expected = ip is not None and ip.protocol == 1
+            l3 = _untagged_l3(frame)
+            expected = isinstance(l3, IPv4) and l3.protocol == 1
             actual = bool(vm_run(program, frame))
             assert actual == expected
 
@@ -426,20 +441,20 @@ class TestCrossCheckAgainstTheDecoder:
         there's no fragment-continuation case to trip over here."""
         program = compile_expression("arp")
         for frame in _CORPUS_FRAMES:
-            decoded = _decoded_ground_truth(frame)
-            expected = decoded.layer(ARP) is not None
+            expected = isinstance(_untagged_l3(frame), ARP)
             actual = bool(vm_run(program, frame))
             assert actual == expected
 
     def test_host_matches_decoded_ipv4_addresses(self):
+        """host matches when the untagged IPv4 header names the address as
+        source or destination, and never otherwise."""
         program = compile_expression("host 192.168.1.96")
         target = ipaddress.IPv4Address("192.168.1.96")
         for frame in _CORPUS_FRAMES:
-            decoded = _decoded_ground_truth(frame)
-            ip = decoded.layer(IPv4)
-            expected = ip is not None and target in (
-                ipaddress.IPv4Address(ip.src),
-                ipaddress.IPv4Address(ip.dst),
+            l3 = _untagged_l3(frame)
+            expected = isinstance(l3, IPv4) and target in (
+                ipaddress.IPv4Address(l3.src),
+                ipaddress.IPv4Address(l3.dst),
             )
             actual = bool(vm_run(program, frame))
             assert actual == expected
