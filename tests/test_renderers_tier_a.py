@@ -109,14 +109,17 @@ class TestTLSRenderer:
         assert "\x1b" not in text
         assert "SNI: \\x1b[2Jevil.tests" in text
 
-    def test_malformed_client_hello_is_contained(self):
+    def test_unparseable_client_hello_is_informational(self):
         """C2: a Handshake record starting with type 1 parses as a
-        ClientHello on demand; one too short to be one renders a [!]
-        line instead of raising out of the renderer."""
+        ClientHello on demand; one too short to be one renders a [~]
+        line instead of raising out of the renderer. Not a [!]: an
+        encrypted TLS 1.2 Finished looks exactly like this one time in
+        256, and it is healthy traffic."""
         record = bytes.fromhex("16030300050100001000")
         text = render(tcp_payload_frame(443, record))
         assert "[+] TLS handshake (client_hello)" in text
-        assert "[!] ClientHello malformed:" in text
+        assert "[~] Not parsed as a ClientHello" in text
+        assert "[!]" not in text
 
     def test_client_hello_without_extensions(self):
         """TLS 1.2 and earlier allow a ClientHello with no extensions

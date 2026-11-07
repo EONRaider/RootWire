@@ -749,10 +749,11 @@ class OutputToScreen(Output):
         naming its content type, the handshake message for a Handshake
         record, the record-layer version and length. A ClientHello also
         gets its own version, SNI host name, cipher-suite count and
-        extension list, parsed on demand inside a guard: an encrypted
-        TLS 1.2 Finished whose ciphertext happens to start with 1 reads
-        as a ClientHello and raises (see
-        :attr:`netprotocols.TLS.client_hello`). A ClientHello may carry no
+        extension list, parsed on demand. An encrypted TLS 1.2 Finished
+        whose ciphertext happens to start with 1 reads as a ClientHello
+        and raises (see :attr:`netprotocols.TLS.client_hello`), so a
+        failure to parse one is an informational ``[~]`` line, not a
+        ``[!]``: healthy traffic produces it. A ClientHello may carry no
         extensions block at all (TLS 1.2 and earlier)."""
         message = (
             f" ({layer.handshake_type_name})"
@@ -764,10 +765,22 @@ class OutputToScreen(Output):
             f"{layer.legacy_version_name} | "
             f"{layer.length} byte{'' if layer.length == 1 else 's'}"
         )
-        with self._guard("ClientHello"):
+        try:
             hello = layer.client_hello
-            if hello is None:
-                return
+        except ProtocolError as error:
+            # Not a [!]: a healthy encrypted TLS 1.2 Finished is a
+            # Handshake record whose first ciphertext byte is 1 about
+            # one time in 256, and no field tells it from a ClientHello
+            # cut short. Informational, like the [~] best-effort miss.
+            reason = _sanitize_for_terminal(str(error))
+            self._print(
+                f"{_II}[~] Not parsed as a ClientHello (an encrypted "
+                f"handshake message can begin like one): {reason}"
+            )
+            return
+        if hello is None:
+            return
+        with self._guard("ClientHello"):
             # The library checks the name is ASCII, but ESC is ASCII:
             # the SNI is chosen by whoever sent the ClientHello.
             name = layer.server_name
