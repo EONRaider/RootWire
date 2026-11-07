@@ -1384,12 +1384,28 @@ class OutputToScreen(Output):
         elif layer.error_data:
             self._print(f"{_II}Data: {len(layer.error_data)} bytes")
 
+    def _render_lldp_text_tlvs(self, layer: LLDP) -> None:
+        """The System Name, Port Description and System Description,
+        one line each, sanitized, kept on one line and cut. A duplicate
+        is out of spec (lldpd drops it, Wireshark flags it), so it is
+        shown too, but only up to :data:`_LLDP_REPEAT_LIMIT` of each
+        type, the rest counted: one crafted LLDPDU of minimal TLVs must
+        not print hundreds of lines."""
+        for label, tlv_type in _LLDP_TEXT_TLVS:
+            values = [tlv.value for tlv in layer.tlvs if tlv.type == tlv_type]
+            for value in values[:_LLDP_REPEAT_LIMIT]:
+                self._print(f"{_II}{label}: {_wire_text(value)}")
+            extra = len(values) - _LLDP_REPEAT_LIMIT
+            if extra > 0:
+                self._print(f"{_II}{label}: (+{extra} more)")
+
     @_render.register
     def _(self, layer: LLDP, frame: DecodedFrame) -> None:
         """LLDP: the Chassis ID, Port ID and Time To Live an analyst maps
         a neighbor by (0 is a shutdown LLDPDU), flagged when the LLDPDU
         does not open with them as 802.1AB requires; the System Name,
-        Port Description and System Description (duplicates included),
+        Port Description and System Description (duplicates included, up
+        to :data:`_LLDP_REPEAT_LIMIT` of each, the rest counted),
         sanitized, kept on one line and cut -- the neighbor chose every
         byte -- and every other TLV
         by name and size. No accessor here raises."""
@@ -1405,12 +1421,7 @@ class OutputToScreen(Output):
                 f"{_II}[!] Does not open with Chassis ID, Port ID and Time "
                 f"to Live (802.1AB): receivers discard it"
             )
-        for label, tlv_type in _LLDP_TEXT_TLVS:
-            # Every one, not just the first: a duplicate is out of spec
-            # (lldpd drops it, Wireshark flags it), so it is shown too.
-            for tlv in layer.tlvs:
-                if tlv.type == tlv_type:
-                    self._print(f"{_II}{label}: {_wire_text(tlv.value)}")
+        self._render_lldp_text_tlvs(layer)
         others = [
             _lldp_tlv_text(tlv)
             for tlv in layer.tlvs
@@ -1825,6 +1836,10 @@ _LLDP_TEXT_TLVS = (
     ("Port Description", 4),
     ("System Description", 6),
 )
+
+#: How many of each LLDP text TLV are shown before the rest are only
+#: counted. 802.1AB allows one; a few duplicates are still worth seeing.
+_LLDP_REPEAT_LIMIT = 4
 
 #: LLDP TLV types already shown, left out of the "Other TLVs" line:
 #: End, Chassis ID, Port ID, Time to Live and the text TLVs.

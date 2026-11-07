@@ -29,7 +29,7 @@ from netprotocols import (
 from conftest import FIXTURES, read_pcap
 from rootwire.decoder import decode_frame
 from rootwire.frame import DecodedFrame
-from rootwire.output import _TEXT_LIMIT, OutputToScreen
+from rootwire.output import _LLDP_REPEAT_LIMIT, _TEXT_LIMIT, OutputToScreen
 
 #: The six classes this module renders; none may fall back to the
 #: "(no renderer)" line anywhere in their captures.
@@ -167,6 +167,21 @@ def test_lldp_duplicate_text_tlv_is_shown() -> None:
     text = render(lldp_frame(*mandatory_tlvs(), first, second))
     assert "System Name: switch-a\n" in text
     assert "System Name: switch-b\n" in text
+
+
+def test_lldp_duplicate_text_tlvs_are_capped() -> None:
+    """Twenty System Names, each a minimal TLV, print the first
+    _LLDP_REPEAT_LIMIT and count the rest, so one crafted LLDPDU cannot
+    flood the terminal; the other text TLVs are capped on their own."""
+    names = [LLDPTLV(5, f"sw-{i:02}".encode()) for i in range(20)]
+    text = render(lldp_frame(*mandatory_tlvs(), *names, LLDPTLV(4, b"ge-0")))
+    shown = [ln for ln in text.splitlines() if "System Name:" in ln]
+    assert len(shown) == _LLDP_REPEAT_LIMIT + 1
+    assert "System Name: sw-00" in shown[0]
+    assert f"System Name: sw-{_LLDP_REPEAT_LIMIT - 1:02}" in text
+    assert f"System Name: sw-{_LLDP_REPEAT_LIMIT:02}" not in text
+    assert shown[-1].endswith(f"System Name: (+{20 - _LLDP_REPEAT_LIMIT} more)")
+    assert "Port Description: ge-0\n" in text
 
 
 # --- CDP -------------------------------------------------------------------
