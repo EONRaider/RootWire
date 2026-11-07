@@ -6,6 +6,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.0.0] - 2026-11-07
+
+RootWire adopts [NETProtocols](https://github.com/EONRaider/NETProtocols)
+2.9: the library now decodes some twenty more protocols, and RootWire
+renders each of them on screen, adds `--decode-as`, pcapng replay and
+conversation statistics, and hardens what reaches the terminal. It is a
+major release for three breaking changes, each marked **BREAKING**
+below: the NDJSON wire `type` field of ICMPv4/ICMPv6/IGMP/BGP/OSPF/PIM/
+VRRP layers moves to `type_`; `rootwire.pcap.read_pcap()` is renamed
+`read_captures()`; and `DecodedFrame.payload` no longer carries the
+Ethernet padding or captured FCS past the frame's declared lengths,
+which move to `DecodedFrame.trailer`. Existing CLI options and exit
+codes are unchanged; `--decode-as` is new.
+
 ### Security
 - LLDP's System Name, Port Description and System Description are now
   shown at most four times each, with any further duplicates counted
@@ -71,10 +85,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   specific line, now ending "upper layers not decoded". A UDP Length of
   1 to 7 is likewise an error at UDP. `total_length == 0` (TSO) stays
   exempt. Restoring the inner layers for display is left for later.
-- **Ethernet padding and a captured FCS are split out as
+- **BREAKING (library API):** **Ethernet padding and a captured FCS are split out as
   `DecodedFrame.trailer`** (the library's `packet.trailer`) instead of
   being part of `frame.payload`, so `-d` no longer prints padding as
-  payload. NDJSON reports its length as the new `trailer_len`.
+  payload. NDJSON reports its length as the new `trailer_len`. The
+  split needs a declared length to cut at (IPv4 Total Length, UDP
+  Length, an 802.3 Length), so behind an Ethernet II EtherType that
+  nothing decodes, a captured FCS stays in `payload`.
 - **NDJSON records gain `l7_miss` and `trailer_len`.**
 - **`decoder.py` now delegates its chain walk to `netprotocols.decode_frame()`
   instead of hand-rolling the same loop the library has shipped since
@@ -105,7 +122,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is not. A bad value -- malformed, an unknown table or decoder, a key
   out of its field's range, a table and key given twice -- is a usage
   error (exit 2).
-- **`-r/--read` now replays pcapng captures, not just classic pcap.**
+- **BREAKING (library API):** **`-r/--read` now replays pcapng captures, not just classic pcap.**
   RootWire's own reader was classic-pcap-only (an explicit descope of
   the original pcap/replay work); the read path now delegates to
   NETProtocols' `read_captures()`, which auto-detects the format from
@@ -301,7 +318,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by default. Encoding now goes through a `json.dumps` `default=` hook
   that handles `bytes`, enums, `ipaddress` objects and sets at any
   depth, and stringifies anything else rather than abort the capture.
-- **NDJSON lost the layer name of ICMPv4, ICMPv6 and IGMP** (and now
+- **BREAKING (NDJSON):** **NDJSON lost the layer name of ICMPv4, ICMPv6 and IGMP** (and now
   BGP, OSPF, PIM, VRRP): spreading a layer's fields after its `"type"`
   discriminator let the layer's own `type` field overwrite it, so an
   echo request read `"type": 8` instead of `"type": "ICMPv4"`.
