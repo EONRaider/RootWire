@@ -207,7 +207,9 @@ the terminal (control and format characters, ESC and bidi overrides
 among them, show as `\xNN` or `\uXXXX`), kept on one line and cut at
 128 characters; a one-line list (chunks, options, attributes, header
 fields) stops at 16 items with `(+N more)`, while DNS shows every
-question and answer on its own line. `-d` adds each
+question and answer on its own line, and LLDP shows at most four of each
+text TLV (System Name, Port Description, System Description), counting
+any duplicates past that. `-d` adds each
 frame's undecoded payload, sanitized the same way.
 
 ## Machine-readable output

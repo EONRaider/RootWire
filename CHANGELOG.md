@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Security
+- LLDP's System Name, Port Description and System Description are now
+  shown at most four times each, with any further duplicates counted
+  as `(+N more)`. Every duplicate used to get its own line, so one
+  crafted LLDPDU of minimal TLVs (about 500 of them fit in a frame)
+  could flood the terminal and bury real output.
 - **Library diagnostics are sanitized before they reach the terminal.**
   The `[!] Malformed header: ...` line and every `[!] ... malformed`
   line printed for a lazily parsed section now pass through the same
