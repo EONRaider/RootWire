@@ -22,7 +22,8 @@ flowchart LR
   D -->|DecodedFrame| O2[NDJSON stream]
   D -->|DecodedFrame| O3[pcap writer]
   D -->|DecodedFrame| O4[statistics]
-  CLI[cli.py] -.wires and runs.-> C & P & D & O1 & O2 & O3 & O4
+  X[decode_as.py] -->|"DecodeOptions: registry + best-effort set"| D
+  CLI[cli.py] -.wires and runs.-> C & P & X & D & O1 & O2 & O3 & O4
 ```
 
 - **[`capture.py`](src/rootwire/capture.py)** opens one raw
@@ -277,6 +278,63 @@ plus an optional `close()` for resources at end of capture:
 They compose freely: `sudo rootwire -i eth0 -w evidence.pcap --json`
 renders NDJSON to stdout while archiving every frame to disk.
 
+## Writing a renderer
+
+Every protocol the library decodes on its own has a screen renderer,
+and every one follows the same rules, because every one renders bytes
+an attacker chose. A new renderer in
+[`output.py`](src/rootwire/output.py) is one method:
+
+```python
+@_render.register
+def _(self, layer: VXLAN, frame: DecodedFrame) -> None:
+    """VXLAN: the VNI and the flags ..."""
+    self._print(f"{_I}[+] VXLAN VNI {layer.vni} | Flags {layer.flags:#04x}")
+```
+
+- **Dispatch is by type.** `singledispatch` follows the MRO, so one
+  renderer covers a subclass: `AH` renders `AHv6`, `VRRP` renders
+  `VRRPv6`. Keep the method short: per-type tables (`_PIM_BODIES`,
+  `_BGP_BODIES`) and module-level helpers keep every function below
+  Radon's grade C.
+- **Guard what parses lazily.** An accessor that parses on first use
+  (DNS records, options, attribute lists, PIM and BGP bodies, ...) can
+  raise `ProtocolError` from a header that decoded fine. Read it inside
+  `with self._guard("X"):`, which prints `[!] X malformed: <reason>`
+  and carries on; read it *once* there, and derive the rest from that
+  value, so no unguarded accessor parses it again.
+- **Sanitize every byte the sender chose.** `_inline_text` escapes
+  control and format characters and keeps the text on one line (a
+  newline would let a sender forge a `[!]` line); `_cut` stops it at
+  `_TEXT_LIMIT` (128) characters; `_wire_text` does both for raw ASCII
+  bytes, and `_secret_text` for a clear-text password. Library
+  diagnostics quote wire bytes too: they go through
+  `_sanitize_for_terminal` as well.
+- **Cap every list.** `_capped` joins at most `_LIST_LIMIT` (16) items
+  and counts the rest as `(+N more)`. A field shown on lines of its
+  own that can repeat (a RADIUS text attribute, an HTTP triage field)
+  stops at the same limit with a `(+N more ...)` line. One packet can
+  carry thousands of chunks, attributes or header fields.
+- **Verify a checksum only through the helpers.** `_checksum_note`
+  verifies against NETProtocols' `verify()`/`compute()` and never
+  flags what it cannot compute; `_transport_checksum_note` adds the
+  enclosing IP and Routing headers (`_enclosing_ip`) and the fragment
+  rule. Anything that needs a key (AH's ICV, a RADIUS Authenticator,
+  STUN's MESSAGE-INTEGRITY) is shown, never verified.
+- **Never decode twice.** A renderer reads the layers the walk made;
+  it never calls `decode_frame` again, which would escape the 32-layer
+  budget. What a layer carries undecoded is counted, not decoded.
+- **Mark severity honestly.** `[!]` is a fault the analyst should act
+  on; `[~]` is information (a best-effort miss, reserved bits set).
+
+Its tests follow `tests/test_renderers_tier_{b,c,d}.py`: one
+corpus-wide test that no fixture frame falls back to `(no renderer)`,
+trips a guard or shows a mismatch; real-fixture happy paths; crafted
+frames for what no capture holds; an ESC, newline and bidi-override
+injection for every text field, written in the source as escapes
+(`"\x1b"`, `"\u202e"`), never as the characters; and a check that
+each guard, sanitize, cut and cap fails a test when removed.
+
 ## Testing without root
 
 The suite runs recorded traffic, not sockets. Its backbone is a
@@ -290,6 +348,13 @@ reads as a mismatch, since upstream guarantees every one verifies; the pcap test
 rest covers payload offsets with TCP options, unknown EtherTypes,
 truncation diagnostics, fragment labeling, NDJSON schema and stdout
 purity, statistics bucketing, and buffer-aliasing regressions.
+`tests/fixtures/http/http.pcap` sits outside the corpus glob, as
+upstream keeps it: HTTP is decoded only through `--decode-as`, which
+`test_decode_as.py`, `test_renderers_http.py` and `test_flows.py`
+exercise on it. Each renderer family has its own test module
+(`test_renderers_tier_{a,b,c,d}.py`, `test_renderers_http.py`), and
+`test_cli.py` checks that the README's Usage block still says what
+`rootwire --help` says.
 
 ```
 uv sync

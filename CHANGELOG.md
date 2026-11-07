@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (whatever a queried server answers), and rendering it unsanitized
   would let a crafted response inject ANSI escape sequences into the
   analyst's terminal. Caught by review before merge (#75).
+- DNS question names, answer names and RDATA are now also kept on one
+  line: a label holding a newline used to split the record's line, so a
+  crafted name could forge a RootWire `[!]` line under it (#94).
+- The IPv4 and TCP `Options:` lines now list at most 16 options and a
+  `(+N more)` marker, so a header full of one-byte No-Operation options
+  can no longer stretch the line without bound (#94).
 
 ### Changed
 - **NETProtocols floor raised to 2.9 (`netprotocols>=2.9,<3`; lock
@@ -27,8 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   MPLS, VXLAN, IP-in-IP, IPsec ESP/AH, OSPF, PIM, VRRP, SCTP, BGP, TLS,
   STUN, NTP, RADIUS, RIP, HSRP and TFTP on its default dispatch, so
   frames that used to end at Ethernet, IP or the transport now carry
-  those layers: in full in `--json`, and by name on screen until their
-  renderers land. An LLDP frame (EtherType 0x88CC) is no longer
+  those layers, in full in `--json` and through a renderer of its own
+  on screen (see *Added*). An LLDP frame (EtherType 0x88CC) is no longer
   "Ethernet plus payload".
 - **Best-effort application decoders are no longer mistaken for
   malformed frames.** 2.3+ dispatches TLS (443), BGP (179), STUN (3478),
@@ -83,6 +89,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nonsense, since `Ethernet` accepts any 14+ bytes structurally (#77).
 
 ### Added
+- **`--decode-as TABLE=KEY:CLASS`**, repeatable: decode what a
+  NETProtocols dispatch table maps *KEY* to as *CLASS* for this capture
+  (`tcp.port=8080:HTTP`, `udp.port=40000:TFTP`, `udp.port=5353:DNS`),
+  or as nothing with `none` (`udp.port=1812:none`). The overrides derive
+  one registry for the whole capture. A class mapped to a port is
+  best-effort like the library's own port decoders, so a bare ACK or a
+  response body on a port told to be HTTP is a `[~]` miss, not a
+  malformed frame; a class a type field also reaches (`IPv4` on a port)
+  is not. A bad value -- malformed, an unknown table or decoder, a key
+  out of its field's range, a table and key given twice -- is a usage
+  error (exit 2).
+- **`-r/--read` now replays pcapng captures, not just classic pcap.**
+  RootWire's own reader was classic-pcap-only (an explicit descope of
+  the original pcap/replay work); the read path now delegates to
+  NETProtocols' `read_captures()`, which auto-detects the format from
+  its magic bytes. `rootwire.pcap.read_pcap()` is renamed
+  `read_captures()` to match — a break only for code embedding
+  RootWire as a library and importing that function by name, not for
+  any CLI usage. `-w`/`PcapWriter` are unaffected: NETProtocols ships
+  no writer, so `-w` still emits classic pcap only (#77).
+- **`--filter` accepts `sctp`**, IP protocol 132 in both stacks, exactly
+  as `tcpdump -dd sctp` compiles it (pinned against tcpdump 4.99.4
+  bytecode over the whole corpus). `port` still matches TCP and UDP
+  only, as before.
+- **Checksum verification rendering** (closes the README's own
+  long-standing Roadmap item). Every IPv4/ICMPv4/ICMPv6/TCP/UDP
+  checksum is now verified against a recomputation via
+  `netprotocols.checksum.verify()`, flagging a mismatch inline (e.g.
+  `Checksum: 0x0000 [!] mismatch (expected 0x1a2b)`) instead of just
+  displaying the on-wire value. Silent (no false positive) for a
+  non-reassembled IP fragment — the wire checksum covers the
+  reassembled datagram, which RootWire never rebuilds, so it can't be
+  verified against a single fragment's bytes without lying (#78).
+  IGMP and GRE checksums are verified the same way (GRE only when its
+  Checksum-Present bit is set), and the renderers added below verify
+  their own: SCTP's CRC32c, VRRP, PIM, OSPF and its LSAs, CDP, and the
+  STUN FINGERPRINT.
+- **Decoded IPv4 and TCP options**, replacing the previous
+  `Options: N bytes` byte count. Kinds the library understands
+  (IPv4's Record Route, Timestamp, Router Alert; TCP's MSS, Window
+  Scale, SACK, Timestamps) render their actual value; every other kind
+  still shows its name with a raw byte count. Malformed options
+  (a declared length running past the buffer) surface as a `[!]`
+  diagnostic rather than raising (#79).
+- **ICMPv6 Neighbor Discovery detail.** A Router/Neighbor Solicitation
+  or Advertisement (or Redirect) now shows its target address and
+  every option TLV (source/target link-layer address rendered as a
+  MAC, others as their raw byte count) instead of a bare Type/Code
+  line — IPv6's ARP-equivalent was previously indistinguishable from
+  any other ICMPv6 message on screen.
 - **Screen renderers for DNS, DNS-over-TCP, and DHCP.** These already
   decoded correctly (chain dispatch is registry-driven, not a RootWire
   whitelist) but printed as the generic `"(no renderer)"` placeholder
@@ -105,37 +161,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   diagnostic instead of raising if malformed, matching the DNS/DHCP
   renderers' contract for the same reason: parsed on demand, not
   validated at decode time (#76).
-- **`-r/--read` now replays pcapng captures, not just classic pcap.**
-  RootWire's own reader was classic-pcap-only (an explicit descope of
-  the original pcap/replay work); the read path now delegates to
-  NETProtocols' `read_captures()`, which auto-detects the format from
-  its magic bytes. `rootwire.pcap.read_pcap()` is renamed
-  `read_captures()` to match — a break only for code embedding
-  RootWire as a library and importing that function by name, not for
-  any CLI usage. `-w`/`PcapWriter` are unaffected: NETProtocols ships
-  no writer, so `-w` still emits classic pcap only (#77).
-- **Checksum verification rendering** (closes the README's own
-  long-standing Roadmap item). Every IPv4/ICMPv4/ICMPv6/TCP/UDP
-  checksum is now verified against a recomputation via
-  `netprotocols.checksum.verify()`, flagging a mismatch inline (e.g.
-  `Checksum: 0x0000 [!] mismatch (expected 0x1a2b)`) instead of just
-  displaying the on-wire value. Silent (no false positive) for a
-  non-reassembled IP fragment — the wire checksum covers the
-  reassembled datagram, which RootWire never rebuilds, so it can't be
-  verified against a single fragment's bytes without lying (#78).
-- **ICMPv6 Neighbor Discovery detail.** A Router/Neighbor Solicitation
-  or Advertisement (or Redirect) now shows its target address and
-  every option TLV (source/target link-layer address rendered as a
-  MAC, others as their raw byte count) instead of a bare Type/Code
-  line — IPv6's ARP-equivalent was previously indistinguishable from
-  any other ICMPv6 message on screen.
-- **Decoded IPv4 and TCP options**, replacing the previous
-  `Options: N bytes` byte count. Kinds the library understands
-  (IPv4's Record Route, Timestamp, Router Alert; TCP's MSS, Window
-  Scale, SACK, Timestamps) render their actual value; every other kind
-  still shows its name with a raw byte count. Malformed options
-  (a declared length running past the buffer) surface as a `[!]`
-  diagnostic rather than raising (#79).
 - **Screen renderers for TLS, SCTP and NTP.** TLS renders one line per
   record (content type, handshake message, record version, length) and,
   for a ClientHello, its version, SNI host name, cipher-suite count and
@@ -152,78 +177,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   line, since an encrypted TLS 1.2 Finished begins that way one time in
   256; and list lines cap at 16 items with "(+N
   more)", since one packet can carry hundreds of 4-byte SCTP chunks.
-- **`--decode-as TABLE=KEY:CLASS`**, repeatable: decode what a
-  NETProtocols dispatch table maps *KEY* to as *CLASS* for this capture
-  (`tcp.port=8080:HTTP`, `udp.port=40000:TFTP`, `udp.port=5353:DNS`),
-  or as nothing with `none` (`udp.port=1812:none`). The overrides derive
-  one registry for the whole capture. A class mapped to a port is
-  best-effort like the library's own port decoders, so a bare ACK or a
-  response body on a port told to be HTTP is a `[~]` miss, not a
-  malformed frame; a class a type field also reaches (`IPv4` on a port)
-  is not. A bad value -- malformed, an unknown table or decoder, a key
-  out of its field's range, a table and key given twice -- is a usage
-  error (exit 2).
-- **HTTP/1.x screen renderer**, for HTTP reached through
-  `--decode-as` (NETProtocols registers it on no port): the start line;
-  Host, User-Agent, Referer, Content-Type, Server and Location, then
-  every field by name (credentials by name only); the body's framing
-  and size, never its bytes, and a chunked body's trailer count; the
-  anomalies that make a message's end ambiguous -- Content-Length with
-  Transfer-Encoding, a repeated or invalid Content-Length, a second
-  Host, ... -- flagged `[!]` as request-smuggling signal, the rest
-  noted `[~]`; and a count of the bytes after the message, since the
-  walk does not chain pipelined messages. Every value of the head is
-  sanitized for the terminal (read as latin-1, a lone 0x9B is a C1
-  CSI), kept on one line and cut.
-- **Conversation statistics** in the end-of-run summary: how many
-  TCP/UDP/SCTP conversations the capture held and the ten largest by
-  bytes, each with its frame and byte counts, both directions together
-  (`netprotocols.flow.flow_key`). A tunnelled frame counts under the
-  conversation inside the tunnel, VXLAN's underlay UDP never counts as
-  one, and at most 65,536 conversations are tracked, the frames of any
-  past that counted as untracked.
-- **`tests/fixtures/http/http.pcap`**, vendored byte-for-byte from
-  NETProtocols 2.9.0: 98 frames of seven HTTP/1.1 connections, outside
-  the corpus glob as upstream keeps it.
-- **Screen renderers for VXLAN, ESP, AH, TFTP, RADIUS and STUN**, the
-  tunnels, IPsec headers and UDP services. VXLAN shows its VNI and
-  flags, and notes reserved bits that are set; ESP its SPI, sequence
-  number and the size of the protected rest (its Next Header is
-  encrypted, so the walk stops there); AH, under IPv4 or IPv6, its SPI,
-  sequence number and what it protects, tunnel mode named, and the
-  ICV's size (never verified: that needs the SA's key). IP-in-IP needs
-  no renderer of its own: the inner IPv4 or IPv6 header renders as one.
-  TFTP shows a request's filename, mode and options, a DATA's or ACK's
-  block, an ERROR's code, name and message, and an OACK's options;
-  RADIUS its code, identifier, length and Authenticator, each text
-  attribute (User-Name, Reply-Message, the station IDs,
-  Acct-Session-Id) on its own line, and every other attribute by name
-  with its address or number, a hidden password by size only; STUN its
-  method and class, Transaction ID and verified FINGERPRINT (a
-  misplaced one flagged), the mapped addresses, ERROR-CODE, SOFTWARE,
-  UNKNOWN-ATTRIBUTES and whether MESSAGE-INTEGRITY is present. All
-  sender-chosen text is sanitized for the terminal, kept on one line
-  and cut at 128 characters, and a malformed RADIUS or STUN attribute
-  list is reported as `[!] ... malformed` without hiding the header.
-- **Screen renderers for LLDP, CDP, STP, MPLS, LLC and SNAP**, the
-  layer-2 neighbor-discovery, bridging and label-switching headers.
-  LLDP shows the Chassis ID (a MAC as a MAC), Port ID and TTL (0 a
-  shutdown LLDPDU), flags an LLDPDU that does not open with them as
-  802.1AB requires, and shows the System Name, Port Description and
-  System Description, then every other TLV by name or, for an
-  Organizationally Specific one, by OUI and subtype; CDP its version,
-  TTL and verified checksum, the Device ID, Port ID, Platform and
-  Software Version, the capabilities and addresses; STP (802.1D and
-  RSTP) the root and bridge identifiers, root path cost, port, flags
-  (an RST BPDU's port role and proposal/agreement handshake among
-  them) and timers, or a TCN's type alone; MPLS each label of the
-  stack with its traffic class and TTL, special-purpose labels by name
-  and the bottom marked, and the payload the stack implies; LLC its
-  DSAP and SSAP by name, group and command/response bits and control
-  format, or Novell's raw 802.3; SNAP its OUI and protocol ID, named
-  as an EtherType where the OUI makes it one. The neighbor-chosen text
-  of LLDP and CDP is sanitized for the terminal, kept on one line and
-  cut at 128 characters.
+- **SNI of a ClientHello split across segments.** A ClientHello too
+  large for one segment (Chromium's) is a TLS best-effort miss, but its
+  first segment usually holds the host name: the decoder now reads it
+  with NETProtocols' `peek_server_name()` into the new
+  `DecodedFrame.sni_peek`, rendered as `[+] TLS ClientHello (continues
+  in a later segment) SNI: ...` and emitted as NDJSON `sni_peek`. Only a
+  *found* name is kept: "not reached" (the name is in a later segment)
+  is not "no SNI", and shows nothing.
 - **Screen renderers for VRRP, HSRP, RIP, OSPF, PIM and BGP**, the
   routing and first-hop-redundancy protocols an analyst triages a
   segment by. VRRP (v2/v3, IPv4/IPv6) shows the VRID, priority (0 a
@@ -254,21 +215,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   raising when malformed; every list caps at 16 items. A PIM Register's
   inner datagram is read from its IP header alone, not walked, so the
   frame keeps a single layer budget.
-- **SNI of a ClientHello split across segments.** A ClientHello too
-  large for one segment (Chromium's) is a TLS best-effort miss, but its
-  first segment usually holds the host name: the decoder now reads it
-  with NETProtocols' `peek_server_name()` into the new
-  `DecodedFrame.sni_peek`, rendered as `[+] TLS ClientHello (continues
-  in a later segment) SNI: ...` and emitted as NDJSON `sni_peek`. Only a
-  *found* name is kept: "not reached" (the name is in a later segment)
-  is not "no SNI", and shows nothing.
-- **`--filter` accepts `sctp`**, IP protocol 132 in both stacks, exactly
-  as `tcpdump -dd sctp` compiles it (pinned against tcpdump 4.99.4
-  bytecode over the whole corpus). `port` still matches TCP and UDP
-  only, as before.
+- **Screen renderers for LLDP, CDP, STP, MPLS, LLC and SNAP**, the
+  layer-2 neighbor-discovery, bridging and label-switching headers.
+  LLDP shows the Chassis ID (a MAC as a MAC), Port ID and TTL (0 a
+  shutdown LLDPDU), flags an LLDPDU that does not open with them as
+  802.1AB requires, and shows the System Name, Port Description and
+  System Description, then every other TLV by name or, for an
+  Organizationally Specific one, by OUI and subtype; CDP its version,
+  TTL and verified checksum, the Device ID, Port ID, Platform and
+  Software Version, the capabilities and addresses; STP (802.1D and
+  RSTP) the root and bridge identifiers, root path cost, port, flags
+  (an RST BPDU's port role and proposal/agreement handshake among
+  them) and timers, or a TCN's type alone; MPLS each label of the
+  stack with its traffic class and TTL, special-purpose labels by name
+  and the bottom marked, and the payload the stack implies; LLC its
+  DSAP and SSAP by name, group and command/response bits and control
+  format, or Novell's raw 802.3; SNAP its OUI and protocol ID, named
+  as an EtherType where the OUI makes it one. The neighbor-chosen text
+  of LLDP and CDP is sanitized for the terminal, kept on one line and
+  cut at 128 characters.
+- **Screen renderers for VXLAN, ESP, AH, TFTP, RADIUS and STUN**, the
+  tunnels, IPsec headers and UDP services. VXLAN shows its VNI and
+  flags, and notes reserved bits that are set; ESP its SPI, sequence
+  number and the size of the protected rest (its Next Header is
+  encrypted, so the walk stops there); AH, under IPv4 or IPv6, its SPI,
+  sequence number and what it protects, tunnel mode named, and the
+  ICV's size (never verified: that needs the SA's key). IP-in-IP needs
+  no renderer of its own: the inner IPv4 or IPv6 header renders as one.
+  TFTP shows a request's filename, mode and options, a DATA's or ACK's
+  block, an ERROR's code, name and message, and an OACK's options;
+  RADIUS its code, identifier, length and Authenticator, each text
+  attribute (User-Name, Reply-Message, the station IDs,
+  Acct-Session-Id) on its own line, and every other attribute by name
+  with its address or number, a hidden password by size only; STUN its
+  method and class, Transaction ID and verified FINGERPRINT (a
+  misplaced one flagged), the mapped addresses, ERROR-CODE, SOFTWARE,
+  UNKNOWN-ATTRIBUTES and whether MESSAGE-INTEGRITY is present. All
+  sender-chosen text is sanitized for the terminal, kept on one line
+  and cut at 128 characters, and a malformed RADIUS or STUN attribute
+  list is reported as `[!] ... malformed` without hiding the header.
+- **HTTP/1.x screen renderer**, for HTTP reached through
+  `--decode-as` (NETProtocols registers it on no port): the start line;
+  Host, User-Agent, Referer, Content-Type, Server and Location, then
+  every field by name (credentials by name only); the body's framing
+  and size, never its bytes, and a chunked body's trailer count; the
+  anomalies that make a message's end ambiguous -- Content-Length with
+  Transfer-Encoding, a repeated or invalid Content-Length, a second
+  Host, ... -- flagged `[!]` as request-smuggling signal, the rest
+  noted `[~]`; and a count of the bytes after the message, since the
+  walk does not chain pipelined messages. Every value of the head is
+  sanitized for the terminal (read as latin-1, a lone 0x9B is a C1
+  CSI), kept on one line and cut.
 - **SCTP has its own bucket in the capture statistics.**
-- **IGMP and GRE checksums are verified** like the others, with a
-  `[!] mismatch` note (GRE only when its Checksum-Present bit is set).
+- **Conversation statistics** in the end-of-run summary: how many
+  TCP/UDP/SCTP conversations the capture held and the ten largest by
+  bytes, each with its frame and byte counts, both directions together
+  (`netprotocols.flow.flow_key`). A tunnelled frame counts under the
+  conversation inside the tunnel, VXLAN's underlay UDP never counts as
+  one, and at most 65,536 conversations are tracked, the frames of any
+  past that counted as untracked.
 - **The corpus grows from 65 frames in 12 captures to 617 in 42**,
   vendored from NETProtocols 2.9.0 (see `tests/fixtures/MANIFEST.md`),
   including the BGP, TLS and RFC 3489 STUN session captures upstream
@@ -276,6 +281,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exactly what the best-effort rule above must not call malformed.
   Every frame is decoded, rendered and serialized, and no rendered
   checksum may read as a mismatch.
+- **`tests/fixtures/http/http.pcap`**, vendored byte-for-byte from
+  NETProtocols 2.9.0: 98 frames of seven HTTP/1.1 connections, outside
+  the corpus glob as upstream keeps it.
 
 ### Fixed
 - **The NDJSON encoder's last-resort `str()` fallback is no longer
@@ -297,7 +305,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are no longer emitted.
 - **False checksum mismatches inside tunnels.** TCP/UDP/ICMP checksums
   were verified against the *outermost* IP header, which is wrong for
-  every tunnelled segment (VXLAN, GRE, IP-in-IP, AH/ESP tunnel mode):
+  every tunnelled segment (VXLAN, GRE, IP-in-IP, AH tunnel mode):
   the corpus' inner UDP in VXLAN and TCP behind AH tunnel mode both
   read as mismatches. They now use the nearest enclosing IP header,
   as `Packet.with_checksums()` does.

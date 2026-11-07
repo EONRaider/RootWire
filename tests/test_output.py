@@ -176,6 +176,40 @@ class TestDNSRendering:
         assert "\x1b" not in text
         assert "\\x1b[31mowned\\x1b[0m" in text
 
+    def test_dns_names_and_rdata_stay_on_one_line(self):
+        """A label is any bytes, a newline included: a name or RDATA
+        that carries one must not start a line of its own, where a
+        sender could forge RootWire's own ``[!]`` diagnostic."""
+        forged = b"x\n[!] Malformed"
+        qname = bytes([len(forged)]) + forged + b"\x00"
+        txt = bytes([len(forged)]) + forged
+        sections = (
+            qname
+            + b"\x00\x10\x00\x01"  # QTYPE=TXT, QCLASS=IN
+            + b"\xc0\x0c"  # the answer's name points at the question's
+            + b"\x00\x10\x00\x01\x00\x00\x00\x3c"  # TXT, IN, TTL 60
+            + len(txt).to_bytes(2, "big")
+            + txt
+        )
+        dns = DNS(
+            transaction_id=1,
+            flags=0x8180,
+            qdcount=1,
+            ancount=1,
+            nscount=0,
+            arcount=0,
+            sections=sections,
+        )
+        udp = UDP(
+            src_port=53, dst_port=1234, length=8 + dns.header_len, checksum=0
+        )
+        ip = _ipv4(protocol=17, total_length=20 + 8 + dns.header_len)
+        text = render(bytes(Packet(_eth(0x0800), ip, udp, dns)))
+        assert "Q: " in text
+        assert "A: " in text
+        assert "\n[!] Malformed" not in text
+        assert text.count("x\\n[!] Malformed") >= 3  # Q name, A name, RDATA
+
 
 class TestExtensionHeaderRendering:
     def test_mld_frame_renders_hop_by_hop(self, request):
@@ -268,6 +302,57 @@ class TestOptionRendering:
         ip = _ipv4(protocol=6, total_length=20 + tcp.header_len)
         text = render(bytes(Packet(_eth(0x0800), ip, tcp)))
         assert "Options: No-Operation, No-Operation, SACK ((100, 200),)" in text
+
+    def test_tcp_options_line_is_capped(self):
+        """Twenty one-byte No-Operation options print the first 16 and
+        a ``(+4 more)`` marker, so a crafted header cannot stretch the
+        Options line without bound."""
+        options = b"\x01" * 20
+        tcp = TCP(
+            src_port=1234,
+            dst_port=80,
+            seq=0,
+            ack=0,
+            data_offset=5 + len(options) // 4,
+            reserved=0,
+            flags=0x010,
+            window=1024,
+            checksum=0,
+            urgent_pointer=0,
+            options=options,
+        )
+        ip = _ipv4(protocol=6, total_length=20 + tcp.header_len)
+        text = render(bytes(Packet(_eth(0x0800), ip, tcp)))
+        line = next(ln for ln in text.splitlines() if "Options:" in ln)
+        assert line.count("No-Operation") == 16
+        assert "(+4 more)" in line
+
+    def test_tcp_options_cap_keeps_the_first_options(self):
+        """Mixed-length options: MSS (4 bytes), 16 No-Operations, Window
+        Scale (3 bytes) and End of Option List. The cap counts parsed
+        options, not bytes, and keeps the earliest: MSS and 15 NOPs are
+        shown, Window Scale is folded into ``(+3 more)``."""
+        options = b"\x02\x04\x05\xb4" + b"\x01" * 16 + b"\x03\x03\x07\x00"
+        tcp = TCP(
+            src_port=1234,
+            dst_port=80,
+            seq=0,
+            ack=0,
+            data_offset=5 + len(options) // 4,
+            reserved=0,
+            flags=0x010,
+            window=1024,
+            checksum=0,
+            urgent_pointer=0,
+            options=options,
+        )
+        ip = _ipv4(protocol=6, total_length=20 + tcp.header_len)
+        text = render(bytes(Packet(_eth(0x0800), ip, tcp)))
+        line = next(ln for ln in text.splitlines() if "Options:" in ln)
+        assert "Options: Maximum Segment Size (1460), No-Operation" in line
+        assert line.count("No-Operation") == 15
+        assert "Window Scale" not in line
+        assert line.endswith("(+3 more)")
 
 
 class TestChecksumVerification:

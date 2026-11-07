@@ -10,12 +10,14 @@ frames with no conversation at all (ARP, ICMP).
 from __future__ import annotations
 
 import io
+import struct
 
 import pytest
+from netprotocols import ESP
 
 from conftest import FIXTURES, read_pcap
 from rootwire import output
-from rootwire.decoder import decode_frame
+from rootwire.decoder import decode_frame, decode_options
 from rootwire.output import StatsCollector, _frame_flow_key
 
 
@@ -131,3 +133,60 @@ def test_vxlan_with_a_truncated_inner_frame_has_no_conversation() -> None:
     frame = decode(data[: start + 6])
     assert type(frame.layers[-1]).__name__ == "VXLAN"
     assert _frame_flow_key(frame) is None
+
+
+def test_esp_over_ip_has_no_conversation() -> None:
+    """ESP straight over IP encrypts the transport, so none of the
+    frames in ``esp.pcap`` belongs to a conversation."""
+    frames = read_pcap(FIXTURES / "esp.pcap")
+    assert frames
+    for data in frames:
+        frame = decode(data)
+        assert isinstance(frame.layers[-1], ESP)
+        assert _frame_flow_key(frame) is None
+
+
+def test_udp_encapsulated_esp_counts_under_its_udp_flow() -> None:
+    """NAT-T ESP (RFC 3948), decoded with ``udp.port=4500:ESP``, still
+    has a cleartext UDP header in front of it: the frame counts under
+    that UDP flow, as the README's capture statistics section says."""
+    esp = struct.pack("!II", 0x1000, 1) + b"\xaa" * 16
+    udp = struct.pack("!HHHH", 40000, 4500, 8 + len(esp), 0) + esp
+    ip = (
+        struct.pack(
+            "!BBHHHBBH4s4s",
+            0x45,
+            0,
+            20 + len(udp),
+            0,
+            0,
+            64,
+            17,
+            0,
+            bytes([10, 0, 0, 1]),
+            bytes([10, 0, 0, 2]),
+        )
+        + udp
+    )
+    data = b"\x02" * 6 + b"\x04" * 6 + b"\x08\x00" + ip
+    frame = decode_frame(
+        data,
+        number=1,
+        timestamp=0,
+        interface=None,
+        options=decode_options({"udp.port": {4500: ESP}}),
+    )
+    assert isinstance(frame.layers[-1], ESP)
+    key = _frame_flow_key(frame)
+    assert key is not None
+    assert key.protocol == 17
+    assert {key.port_a, key.port_b} == {40000, 4500}
+    stats = StatsCollector()
+    stats.update(frame)
+    stream = io.StringIO()
+    stats.report(stream)
+    assert "[=] 1 conversation:\n" in stream.getvalue()
+    assert (
+        f"UDP 10.0.0.1:40000 <-> 10.0.0.2:4500: 1 frame, {len(data)} bytes"
+        in stream.getvalue()
+    )

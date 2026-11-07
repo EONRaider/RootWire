@@ -58,6 +58,13 @@ pipeline.
 - **[`decoder.py`](src/rootwire/decoder.py)** — walks a captured frame's
   protocol chain. Malformed and truncated frames must be diagnosed,
   never crash the capture or read past a buffer.
+- **[`decode_as.py`](src/rootwire/decode_as.py)** — parses
+  `--decode-as` into the overrides the decode walk's registry is
+  derived from. Local input, like `--filter`, with the same failure
+  mode: a value it accepts that it should refuse, or a mapping that
+  hides a header's faults (a class a type field reaches never becomes
+  best-effort, and a frame whose first header fails is always
+  malformed), makes RootWire misreport what it saw.
 - **[`pcap.py`](src/rootwire/pcap.py)** — parses pcap/pcapng files for
   `-r` replay, including the pre-decode link-type check that stops a
   wrong link type from silently decoding into nonsense. A crafted
@@ -66,10 +73,16 @@ pipeline.
   reach.
 - **[`output.py`](src/rootwire/output.py)** — renders decoded fields,
   including raw payload bytes, to the terminal and to NDJSON. Every
-  value it renders came off the wire; two prior fixes addressed terminal
-  control-character injection here (see `CHANGELOG.md`'s `Security`
-  entries for #53 and #75), which is why it counts as in scope alongside
-  the modules doing the actual parsing.
+  value it renders came off the wire, so it holds a contract of its own:
+  every byte a sender chose — DNS names, LLDP/CDP free text, TLS SNI,
+  routing-protocol passwords, TFTP filenames, RADIUS User-Names, STUN
+  SOFTWARE, HTTP fields (read as latin-1, where a lone 0x9B byte is a
+  C1 CSI), library diagnostics quoting wire bytes — is escaped, kept on
+  one line so it cannot forge a `[!]` line, and cut; every list is
+  capped, so one frame cannot flood the terminal. A way past any of
+  that is in scope. Terminal control-character injection has been
+  fixed here before (see `CHANGELOG.md`'s `Security` entries for #53
+  and #75).
 
 Out of scope: the protocol decoding itself — Ethernet, IPv4/IPv6,
 TCP/UDP, DNS, and everything else `decoder.py` and `pcap.py` call into —
