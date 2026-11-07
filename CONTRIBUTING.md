@@ -39,6 +39,21 @@ uv run pytest
 3.14 in CI; locally, whichever interpreter `uv sync` resolved is enough for most
 work.
 
+Pull requests are also held to checks CI does not run, so run these too:
+
+```
+uvx bandit -q -r src tests --skip B101   # B101 is pytest's assert
+uvx radon cc -s -n C src                 # nothing new at grade C or worse
+```
+
+Radon lists only `_pcapng_linktype` and `_Parser._primitive` today; keep it
+that way by splitting a function into helpers or a dispatch table. And every
+function, test helpers included, carries a docstring. `tests/test_cli.py`
+checks that the README's Usage block matches `rootwire --help`, so a changed
+option help means updating the README in the same change. A new protocol
+renderer follows the rules in
+[ARCHITECTURE.md's "Writing a renderer"](ARCHITECTURE.md#writing-a-renderer).
+
 If you change dependencies in `pyproject.toml`, run `uv lock` and commit the
 updated `uv.lock` in the same change. CI installs from the lockfile, so an
 unlocked dependency edit has no effect on the pipeline and will fail there while

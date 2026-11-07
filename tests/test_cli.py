@@ -1,6 +1,7 @@
 import contextlib
 import ctypes
 import os
+import re
 import shutil
 import signal
 import socket as socket_module
@@ -324,3 +325,30 @@ class TestAbortHandling:
         # and flushed the writer, rather than the process exiting with
         # the write still sitting in an unflushed buffer.
         assert out.stat().st_size == 24
+
+
+#: The README's Usage block sits between these two markers.
+_USAGE_START = "<!-- usage:start -->\n```\n"
+_USAGE_END = "```\n<!-- usage:end -->"
+
+
+def test_readme_usage_block_matches_help(monkeypatch):
+    """The README's Usage block is ``rootwire --help``, generated at 80
+    columns on Python 3.13+: an option's help changed without the README
+    fails here, so the two cannot drift apart again."""
+    monkeypatch.setenv("COLUMNS", "80")
+    readme = (FIXTURES.parent.parent / "README.md").read_text(encoding="utf-8")
+    start = readme.index(_USAGE_START) + len(_USAGE_START)
+    block = readme[start : readme.index(_USAGE_END, start)]
+    help_text = build_parser().format_help()
+    assert _words(block) == _words(help_text)
+
+
+def _words(text: str) -> list[str]:
+    """*text* as its words, in order: help as argparse lays it out on any
+    supported Python. Python 3.12 writes ``-i INTERFACE, --interface
+    INTERFACE`` where 3.13+ writes ``-i, --interface INTERFACE``, and
+    places the help column, and so wraps it, differently; neither is a
+    change to what the help says, which is what the README must match."""
+    modern = re.sub(r"(-\w) (\S+), (--[\w-]+) \2", r"\1, \3 \2", text)
+    return modern.split()
