@@ -18,23 +18,31 @@ import sys
 import time
 from abc import ABC, abstractmethod
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from functools import singledispatchmethod
 from typing import IO, Any, cast
 
 from netprotocols import (
     ARP,
+    BGP,
     DHCP,
     DNS,
     GRE,
+    HSRP,
     IGMP,
     NTP,
+    OSPF,
+    OSPFLSA,
+    PIM,
+    RIP,
     SCTP,
     TCP,
     TLS,
     UDP,
     VLAN,
+    VRRP,
+    BGPPathAttribute,
     DNSOverTCP,
     Ethernet,
     ICMPv4,
@@ -46,11 +54,21 @@ from netprotocols import (
     IPv6Fragment,
     IPv6HopByHopOptions,
     IPv6Routing,
+    OSPFLSAHeader,
+    PIMAssert,
+    PIMEncodedSource,
+    PIMHello,
+    PIMJoinPrune,
+    PIMRegister,
+    PIMRegisterStop,
     Protocol,
     ProtocolError,
+    RIPAuthentication,
+    RIPEntry,
     TCPOption,
     compute,
     verify,
+    verify_lsa,
 )
 
 from rootwire.frame import DecodedFrame
@@ -303,13 +321,171 @@ def _checksum_note(
 
 def _transport_checksum_note(frame: DecodedFrame, layer: Protocol) -> str:
     """:func:`_checksum_note` for a layer whose checksum covers what
-    follows it (TCP, UDP), with its enclosing IP and Routing headers;
-    ``""`` for a non-reassembled fragment (see :func:`_is_fragmented`)."""
+    follows it (TCP, UDP, SCTP), with its enclosing IP and Routing
+    headers; ``""`` for a non-reassembled fragment (see
+    :func:`_is_fragmented`).
+
+    Also right for a message whose checksum covers only itself or adds
+    a pseudo-header (VRRP, PIM, OSPF): NETProtocols ignores *payload*
+    for those, and the enclosing IP and fragment rules are the same."""
     if _is_fragmented(frame, layer):
         return ""
     ip, routing = _enclosing_ip(frame, layer)
     return _checksum_note(
         layer, ip=ip, routing=routing, payload=_trailing_bytes(frame, layer)
+    )
+
+
+#: ``0.0.0.0``, built rather than written: routing protocols use it for
+#: "none" (an unelected OSPF DR/BDR, a RIP next hop of "this sender",
+#: RIPv1's absent mask), and the bare literal reads to Bandit as a
+#: bind-all-interfaces address (B104).
+_UNSET_ADDRESS = str(ipaddress.IPv4Address(0))
+
+#: RIP's Request command, IP Address Family Identifier, and its metric
+#: "infinity".
+_RIP_REQUEST = 1
+_RIP_AFI_IP = 2
+_RIP_INFINITY = 16
+
+#: The version nibble that starts an IPv6 header.
+_IPV6_VERSION = 6
+
+
+def _inline_text(text: str) -> str:
+    """*text* sanitized for the terminal (see
+    :func:`_sanitize_for_terminal`) and kept on one line: a newline is
+    shown as ``\\n``. For wire text rendered inside a field line, where
+    a sender-chosen newline could otherwise start a line that reads as
+    RootWire's own (a forged ``[>] Frame`` header or ``[!]`` note)."""
+    return _sanitize_for_terminal(text).replace("\n", "\\n")
+
+
+def _secret_text(data: bytes) -> str:
+    """A clear-text password field (VRRPv2 PASS, RIP type 2, OSPF
+    AuType 1) for display: its NUL padding stripped, any byte outside
+    ASCII shown as ``\\xNN``, and the result sanitized for the terminal
+    on one line (see :func:`_inline_text`) -- ESC and newline are ASCII,
+    and the sender chose every byte."""
+    text = data.rstrip(b"\x00").decode("ascii", errors="backslashreplace")
+    return _inline_text(text) if text else "(empty)"
+
+
+def _or_none(address: str) -> str:
+    """*address*, or ``"none"`` for ``0.0.0.0``."""
+    return "none" if address == _UNSET_ADDRESS else address
+
+
+def _lsa_header_text(header: OSPFLSAHeader) -> str:
+    """One OSPF LSA header as ``"Router-LSA 10.0.0.1 (adv 10.0.0.1,
+    seq 0x80000002)"``: the triple that identifies an LSA instance."""
+    return (
+        f"{header.ls_type_name} {header.link_state_id} "
+        f"(adv {header.advertising_router}, "
+        f"seq {header.ls_sequence_number_hex_str})"
+    )
+
+
+def _lsa_text(lsa: OSPFLSA) -> str:
+    """One LSA of a Link State Update: its header (see
+    :func:`_lsa_header_text`), flagged when its LS Checksum fails --
+    the Fletcher checksum over the LSA, which a router discards it for
+    (RFC 2328 §13)."""
+    note = "" if verify_lsa(lsa) else " [!] bad LS checksum"
+    return _lsa_header_text(lsa.header) + note
+
+
+def _rip_route_text(entry: RIPEntry) -> str:
+    """One RIP route as ``"10.20.2.0/24 via 10.20.1.2 metric 1"``.
+
+    RIPv1 carries no mask (``0.0.0.0``), and a next hop of ``0.0.0.0``
+    means "via the sender" (RFC 2453 §4.4), so each is shown only when
+    set. A mask that is not contiguous has no prefix length and is
+    shown as itself. Metric 16 is infinity: the route is withdrawn or
+    poisoned.
+    """
+    destination = entry.address
+    if entry.subnet_mask != _UNSET_ADDRESS:
+        network: ipaddress.IPv4Network | None
+        try:
+            network = ipaddress.IPv4Network(
+                f"{entry.address}/{entry.subnet_mask}", strict=False
+            )
+        except ValueError:
+            network = None
+        # ipaddress reads a mask such as 0.255.255.255 as a *host* mask
+        # and inverts it; only a mask it reproduces is a prefix length.
+        if network is not None and str(network.netmask) == entry.subnet_mask:
+            destination = f"{entry.address}/{network.prefixlen}"
+        else:
+            destination = f"{entry.address} mask {entry.subnet_mask}"
+    if entry.afi != _RIP_AFI_IP:
+        destination = f"{destination} ({entry.afi_name})"
+    via = f" via {entry.next_hop}" if entry.next_hop != _UNSET_ADDRESS else ""
+    metric = (
+        "unreachable"
+        if entry.metric >= _RIP_INFINITY
+        else f"metric {entry.metric}"
+    )
+    return f"{destination}{via} {metric}"
+
+
+def _rip_auth_text(auth: RIPAuthentication) -> str:
+    """A RIPv2 authentication entry: a plain-text password (type 2)
+    shown sanitized; a keyed digest (type 3, RFC 4822) by its Key ID,
+    sequence number and digest length; anything else by name."""
+    if (password := auth.password) is not None:
+        return f"{auth.auth_type_name} ({_secret_text(password)})"
+    if auth.key_id is not None:
+        # Auth Data Len counts the trailer's 4-byte header as well as
+        # the digest, so the digest's size is left to the Trailer field.
+        return (
+            f"{auth.auth_type_name} (key {auth.key_id}, "
+            f"seq {auth.sequence_number})"
+        )
+    return auth.auth_type_name
+
+
+def _pim_source_text(source: PIMEncodedSource) -> str:
+    """A Join/Prune source as ``"10.184.1.2/32"``, with its WC and RPT
+    bits when set: ``(*,G)`` and ``(S,G,rpt)`` entries differ from an
+    ``(S,G)`` one only there."""
+    flags = " ".join(
+        name
+        for name, bit in (("WC", source.wildcard), ("RPT", source.rpt))
+        if bit
+    )
+    text = f"{source.address}/{source.mask_len}"
+    return f"{text} ({flags})" if flags else text
+
+
+def _pim_register_inner(register: PIMRegister) -> str:
+    """What a PIM Register encapsulates: ``"Null-Register"``, or the
+    inner datagram's addresses and protocol and its length.
+
+    Only the inner IP header is decoded, by itself. The library's
+    :attr:`~netprotocols.PIMRegister.encapsulated` would run a second
+    :func:`~netprotocols.decode_frame` walk over the inner datagram,
+    outside the frame's single layer budget (see ARCHITECTURE.md); one
+    header is all an analyst needs to see which flow is being
+    registered.
+    """
+    if register.null_register:
+        return "Null-Register"
+    packet = register.packet
+    try:
+        if packet[:1] and packet[0] >> 4 == _IPV6_VERSION:
+            inner6 = IPv6.decode(packet)
+            return (
+                f"{inner6.src} -> {inner6.dst} ({inner6.next_header_name}), "
+                f"{len(packet)} bytes"
+            )
+        inner4 = IPv4.decode(packet)
+    except ProtocolError:
+        return f"{len(packet)} bytes, inner IP header malformed"
+    return (
+        f"{inner4.src} -> {inner4.dst} ({inner4.protocol_name}), "
+        f"{len(packet)} bytes"
     )
 
 
@@ -865,6 +1041,420 @@ class OutputToScreen(Output):
             self._print(f"{_II}MAC: {detail}")
         if layer.remainder:
             self._print(f"{_II}Unparsed: {len(layer.remainder)} bytes")
+
+    @_render.register
+    def _(self, layer: VRRP, frame: DecodedFrame) -> None:
+        """VRRP (v2 and v3, IPv4 and IPv6): the message type, virtual
+        router ID and priority -- 0 is a master resigning, 255 the
+        address owner -- the virtual addresses, the advertisement
+        interval and the checksum, verified the way RFC 3768/9568 define
+        it per version. VRRPv2 adds its authentication, a ``PASS``
+        password shown sanitized: it is clear text the sender chose."""
+        priority = _VRRP_PRIORITY_NOTES.get(layer.priority, "")
+        self._print(
+            f"{_I}[+] VRRPv{layer.version} {layer.type_name} | "
+            f"VRID {layer.vrid} | Priority {layer.priority}{priority}"
+        )
+        note = _transport_checksum_note(frame, layer)
+        self._print(
+            f"{_II}Addresses: {_capped(list(layer.addresses))} | "
+            f"Interval: {layer.advertisement_interval:g}s | "
+            f"Checksum: {layer.checksum_hex_str}{note}"
+        )
+        if layer.auth_type_name is not None:
+            detail = (
+                f" ({_secret_text(layer.auth_data)})"
+                if layer.auth_type == _VRRP_AUTH_PASSWORD
+                else ""
+            )
+            self._print(f"{_II}Auth: {layer.auth_type_name}{detail}")
+
+    @_render.register
+    def _(self, layer: HSRP, frame: DecodedFrame) -> None:
+        """HSRP: op code, standby group, the sender's state and
+        priority; the virtual IP and the group's virtual MAC, the timers;
+        and the Authentication Data -- a clear-text password, shown
+        sanitized and flagged when it is RFC 2281's default ``cisco``."""
+        self._print(
+            f"{_I}[+] HSRP {layer.opcode_name} | Group {layer.group} | "
+            f"State {layer.state_name} | Priority {layer.priority}"
+        )
+        self._print(
+            f"{_II}Virtual IP: {layer.virtual_ip} "
+            f"(MAC {layer.virtual_mac}) | Hellotime: {layer.hellotime}s | "
+            f"Holdtime: {layer.holdtime}s"
+        )
+        # auth_data_str already shows unprintable bytes as hex; it is
+        # sanitized anyway, as every wire-chosen string here is.
+        auth = _sanitize_for_terminal(layer.auth_data_str) or "(empty)"
+        default = " (default)" if layer.is_default_auth else ""
+        self._print(f"{_II}Auth: {auth}{default}")
+
+    @_render.register
+    def _(self, layer: RIP, frame: DecodedFrame) -> None:
+        """RIP (v1/v2): command and version; a RIPv2 authentication
+        entry (see :func:`_rip_auth_text`) and RFC 4822 trailer; then
+        either a request for the whole table (RFC 2453 §3.9.1) or the
+        routes, capped, and any bytes short of a whole entry."""
+        self._print(f"{_I}[+] RIPv{layer.version} {layer.command_name}")
+        with self._guard("Entries"):
+            if (auth := layer.authentication) is not None:
+                trailer = layer.authentication_trailer
+                extra = (
+                    f" | Trailer: {len(trailer)} bytes"
+                    if trailer is not None
+                    else ""
+                )
+                self._print(f"{_II}Auth: {_rip_auth_text(auth)}{extra}")
+            routes = layer.routes
+            if layer.command == _RIP_REQUEST and _is_whole_table_request(
+                routes
+            ):
+                self._print(f"{_II}Request: the whole routing table")
+            else:
+                self._print(
+                    f"{_II}Routes ({len(routes)}): "
+                    + _capped([_rip_route_text(route) for route in routes])
+                )
+            if layer.remainder:
+                self._print(f"{_II}Unparsed: {len(layer.remainder)} bytes")
+
+    @_render.register
+    def _(self, layer: OSPF, frame: DecodedFrame) -> None:
+        """OSPFv2: message type, router and area; the authentication
+        (a simple password sanitized, a digest by key and sequence) and
+        the packet checksum, which cryptographic authentication replaces
+        (RFC 2328 §D.4.3); then the message body, one helper per type
+        (see :data:`_OSPF_BODIES`)."""
+        backbone = " (backbone)" if layer.area_id == _UNSET_ADDRESS else ""
+        self._print(
+            f"{_I}[+] OSPFv{layer.version} {layer.type_name} | "
+            f"Router {layer.router_id} | Area {layer.area_id}{backbone}"
+        )
+        if layer.au_type in OSPF.CRYPTOGRAPHIC_AU_TYPES:
+            auth = (
+                f"{layer.au_type_name} (key {layer.key_id}, "
+                f"seq {layer.crypto_sequence_number}, "
+                f"{len(layer.auth_trailer)}-byte trailer)"
+            )
+            checksum = "not used (cryptographic authentication)"
+        else:
+            auth = layer.au_type_name
+            if layer.au_type == _OSPF_AUTH_PASSWORD:
+                auth += f" ({_secret_text(layer.authentication)})"
+            note = _transport_checksum_note(frame, layer)
+            checksum = f"{layer.checksum_hex_str}{note}"
+        self._print(f"{_II}Auth: {auth} | Checksum: {checksum}")
+        if (body := _OSPF_BODIES.get(layer.type)) is not None:
+            with self._guard(layer.type_name):
+                body(self, layer)
+
+    def _render_ospf_hello(self, layer: OSPF) -> None:
+        """An OSPF Hello: mask, timers, priority and options, the
+        DR/BDR election (``none`` before one), and the neighbors heard."""
+        hello = layer.hello
+        if hello is None:  # pragma: no cover -- dispatched on the type
+            return
+        self._print(
+            f"{_II}Mask: {hello.network_mask} | "
+            f"Hello: {hello.hello_interval}s | "
+            f"Dead: {hello.router_dead_interval}s | "
+            f"Priority: {hello.router_priority} | "
+            f"Options: {hello.options_str or 'none'}"
+        )
+        self._print(
+            f"{_II}DR: {_or_none(hello.designated_router)} | "
+            f"BDR: {_or_none(hello.backup_designated_router)} | "
+            f"Neighbors: {_capped(list(hello.neighbors))}"
+        )
+
+    def _render_ospf_dd(self, layer: OSPF) -> None:
+        """An OSPF Database Description: MTU, the I/M/MS flags, the DD
+        sequence number and the LSA headers it summarizes."""
+        dd = layer.database_description
+        if dd is None:  # pragma: no cover -- dispatched on the type
+            return
+        self._print(
+            f"{_II}MTU: {dd.interface_mtu} | "
+            f"Flags: {dd.flags_str or 'none'} | "
+            f"Seq: {dd.dd_sequence_number:#010x} | "
+            f"Options: {dd.options_str or 'none'}"
+        )
+        self._print(
+            f"{_II}LSA headers ({len(dd.lsa_headers)}): "
+            + _capped([_lsa_header_text(h) for h in dd.lsa_headers])
+        )
+
+    def _render_ospf_lsr(self, layer: OSPF) -> None:
+        """An OSPF Link State Request: the LSAs asked for."""
+        requests = layer.ls_requests or ()
+        self._print(
+            f"{_II}Requests ({len(requests)}): "
+            + _capped(
+                [
+                    f"{r.ls_type_name} {r.link_state_id} "
+                    f"(adv {r.advertising_router})"
+                    for r in requests
+                ]
+            )
+        )
+
+    def _render_ospf_lsu(self, layer: OSPF) -> None:
+        """An OSPF Link State Update: each LSA's header, with its LS
+        Checksum verified (see :func:`_lsa_text`)."""
+        lsas = layer.lsas or ()
+        self._print(
+            f"{_II}LSAs ({len(lsas)}): "
+            + _capped([_lsa_text(lsa) for lsa in lsas])
+        )
+
+    def _render_ospf_ack(self, layer: OSPF) -> None:
+        """An OSPF Link State Acknowledgment: the LSA headers it
+        acknowledges (headers only: there is no LSA body to verify)."""
+        headers = layer.ls_acknowledgments or ()
+        self._print(
+            f"{_II}Acknowledged ({len(headers)}): "
+            + _capped([_lsa_header_text(h) for h in headers])
+        )
+
+    @_render.register
+    def _(self, layer: PIM, frame: DecodedFrame) -> None:
+        """PIM (v2, IPv4 and IPv6): message type and checksum, verified
+        per RFC 7761 §4.9 (a Register's covers only its first 8 bytes),
+        then the message, parsed on demand inside a guard and rendered
+        by type (see :data:`_PIM_BODIES`); the types kept raw (Bootstrap,
+        Candidate-RP-Advertisement, ...) show their length."""
+        note = _transport_checksum_note(frame, layer)
+        self._print(
+            f"{_I}[+] PIMv{layer.version} {layer.type_name} | "
+            f"Checksum: {layer.checksum_hex_str}{note}"
+        )
+        with self._guard(layer.type_name):
+            message = layer.message
+            if message is None:
+                self._print(f"{_II}Body: {len(layer.body)} bytes, not decoded")
+                return
+            _PIM_BODIES[type(message)](self, message)
+
+    def _render_pim_hello(self, hello: PIMHello) -> None:
+        """A PIM Hello: the options a neighbor and DR election use, each
+        shown only when present, and the sender's secondary addresses."""
+        parts = []
+        if hello.holdtime is not None:
+            parts.append(f"Holdtime: {hello.holdtime}s")
+        if hello.dr_priority is not None:
+            parts.append(f"DR priority: {hello.dr_priority}")
+        if hello.generation_id is not None:
+            parts.append(f"Generation ID: {hello.generation_id:#010x}")
+        if (delay := hello.lan_prune_delay) is not None:
+            parts.append(
+                f"LAN prune delay: {delay.propagation_delay}ms "
+                f"(override {delay.override_interval}ms"
+                f"{', T' if delay.t else ''})"
+            )
+        self._print(f"{_II}{' | '.join(parts) or 'No options'}")
+        if (addresses := hello.address_list) is not None:
+            self._print(
+                f"{_II}Secondary addresses: "
+                + _capped([address.address for address in addresses])
+            )
+
+    def _render_pim_register(self, register: PIMRegister) -> None:
+        """A PIM Register: the Border bit and what it encapsulates (see
+        :func:`_pim_register_inner`)."""
+        border = " | Border" if register.border else ""
+        self._print(
+            f"{_II}Encapsulated: {_pim_register_inner(register)}{border}"
+        )
+
+    def _render_pim_register_stop(self, stop: PIMRegisterStop) -> None:
+        """A PIM Register-Stop: the group and source to stop for."""
+        group = stop.group
+        self._print(
+            f"{_II}Group: {group.address}/{group.mask_len} | "
+            f"Source: {stop.source.address}"
+        )
+
+    def _render_pim_join_prune(self, message: PIMJoinPrune) -> None:
+        """A PIM Join/Prune (also Graft and Graft-Ack): the upstream
+        neighbor and holdtime, then one line per group with the sources
+        joined and pruned, groups and sources both capped."""
+        self._print(
+            f"{_II}Upstream: {message.upstream_neighbor.address} | "
+            f"Holdtime: {message.holdtime}s | Groups: {len(message.groups)}"
+        )
+        for group_set in message.groups[:_LIST_LIMIT]:
+            group = group_set.group
+            joined = _capped([_pim_source_text(s) for s in group_set.joined])
+            pruned = _capped([_pim_source_text(s) for s in group_set.pruned])
+            self._print(
+                f"{_II}Group {group.address}/{group.mask_len}: "
+                f"join {joined}; prune {pruned}"
+            )
+        if (extra := len(message.groups) - _LIST_LIMIT) > 0:
+            self._print(f"{_II}(+{extra} more groups)")
+
+    def _render_pim_assert(self, message: PIMAssert) -> None:
+        """A PIM Assert: the (S,G) contested and the metric that wins
+        it -- preference first, then metric, lower being better."""
+        group = message.group
+        rpt = " | RPT" if message.rpt else ""
+        self._print(
+            f"{_II}Group: {group.address}/{group.mask_len} | "
+            f"Source: {message.source.address} | "
+            f"Preference: {message.metric_preference} | "
+            f"Metric: {message.metric}{rpt}"
+        )
+
+    @_render.register
+    def _(self, layer: BGP, frame: DecodedFrame) -> None:
+        """BGP: one section per message (a segment often carries
+        several), naming the type and length, then the body by type
+        (see :data:`_BGP_BODIES`). Every body accessor parses on demand
+        and raises on a field that overruns, so each part renders inside
+        its own guard."""
+        self._print(f"{_I}[+] BGP {layer.type_name} ({layer.length} bytes)")
+        if (body := _BGP_BODIES.get(layer.type)) is not None:
+            body(self, layer)
+
+    def _render_bgp_open(self, layer: BGP) -> None:
+        """A BGP OPEN: version, AS, hold time, BGP Identifier and the
+        optional parameters by type and size (capabilities stay raw)."""
+        self._print(
+            f"{_II}Version: {layer.version} | AS: {layer.my_as} | "
+            f"Hold time: {layer.hold_time}s | ID: {layer.bgp_identifier}"
+        )
+        with self._guard("Optional parameters"):
+            parameters = layer.optional_parameters or ()
+            self._print(
+                f"{_II}Optional parameters: "
+                + _capped(
+                    [
+                        f"{p.type_name} ({len(p.value)} bytes)"
+                        for p in parameters
+                    ]
+                )
+            )
+
+    def _render_bgp_update(self, layer: BGP) -> None:
+        """A BGP UPDATE: withdrawn routes, path attributes and NLRI,
+        each capped (see :func:`_bgp_update_lines`) and guarded; one
+        with none of the three is an End-of-RIB marker for IPv4 unicast
+        (RFC 4724 §2)."""
+        with self._guard("UPDATE"):
+            lines = _bgp_update_lines(layer)
+            for line in lines or ["End-of-RIB (IPv4 unicast)"]:
+                self._print(f"{_II}{line}")
+
+    def _render_bgp_notification(self, layer: BGP) -> None:
+        """A BGP NOTIFICATION: the error code and subcode, then the
+        operator's shutdown communication (RFC 9003), sanitized -- free
+        UTF-8 text from the peer -- or else the raw data's size."""
+        subcode = layer.error_subcode_name
+        self._print(
+            f"{_II}Error: {layer.error_code_name}"
+            + (f" / {subcode}" if subcode else "")
+        )
+        if (message := layer.shutdown_communication) is not None:
+            self._print(f"{_II}Shutdown communication: {_inline_text(message)}")
+        elif layer.error_data:
+            self._print(f"{_II}Data: {len(layer.error_data)} bytes")
+
+
+#: Annotations for the VRRP priorities with a meaning of their own
+#: (RFC 3768 §5.3.4, RFC 5798 §5.2.4).
+_VRRP_PRIORITY_NOTES = {0: " (master resigning)", 255: " (address owner)"}
+
+#: VRRPv2's Simple Text Password Auth Type, and OSPF's simple password
+#: AuType: both put the password in the clear.
+_VRRP_AUTH_PASSWORD = 1
+_OSPF_AUTH_PASSWORD = 1
+
+#: OSPF message type -> the renderer for its body.
+_OSPF_BODIES: dict[int, Callable[[OutputToScreen, OSPF], None]] = {
+    1: OutputToScreen._render_ospf_hello,
+    2: OutputToScreen._render_ospf_dd,
+    3: OutputToScreen._render_ospf_lsr,
+    4: OutputToScreen._render_ospf_lsu,
+    5: OutputToScreen._render_ospf_ack,
+}
+
+#: Parsed PIM message class -> its renderer. Graft and Graft-Ack parse
+#: as PIMJoinPrune, so every class :attr:`PIM.message` returns is here.
+_PIM_BODIES: dict[type, Callable[[OutputToScreen, Any], None]] = {
+    PIMHello: OutputToScreen._render_pim_hello,
+    PIMRegister: OutputToScreen._render_pim_register,
+    PIMRegisterStop: OutputToScreen._render_pim_register_stop,
+    PIMJoinPrune: OutputToScreen._render_pim_join_prune,
+    PIMAssert: OutputToScreen._render_pim_assert,
+}
+
+#: BGP message type -> the renderer for its body. KEEPALIVE has none and
+#: a ROUTE-REFRESH body stays raw, so neither is listed.
+_BGP_BODIES: dict[int, Callable[[OutputToScreen, BGP], None]] = {
+    1: OutputToScreen._render_bgp_open,
+    2: OutputToScreen._render_bgp_update,
+    3: OutputToScreen._render_bgp_notification,
+}
+
+
+#: Most bytes of a raw BGP path attribute value shown in hex: one
+#: attribute can be up to 65,535 bytes long (an AS_PATH, COMMUNITIES or
+#: an attribute this library keeps raw), far past one readable line.
+_BGP_VALUE_PREVIEW = 32
+
+
+def _bgp_attribute_text(attribute: BGPPathAttribute) -> str:
+    """One path attribute as ``"NAME value"``: the decoded value for the
+    types the library decodes (ORIGIN, NEXT_HOP, MED, LOCAL_PREF), else
+    the raw value in hex, its first :data:`_BGP_VALUE_PREVIEW` bytes
+    only when it is longer, then how many bytes were left out and the
+    full length, in :func:`_capped`'s ``(+N more)`` style."""
+    if attribute.value is not None:
+        return f"{attribute.type_name} {attribute.value_text}"
+    data = attribute.data
+    if not data:
+        return f"{attribute.type_name} (empty)"
+    if len(data) <= _BGP_VALUE_PREVIEW:
+        return f"{attribute.type_name} {data.hex()}"
+    preview = data[:_BGP_VALUE_PREVIEW].hex()
+    omitted = len(data) - _BGP_VALUE_PREVIEW
+    return (
+        f"{attribute.type_name} {preview}... "
+        f"(+{omitted} more bytes, {len(data)} in all)"
+    )
+
+
+def _bgp_update_lines(layer: BGP) -> list[str]:
+    """The withdrawn-routes, path-attributes and NLRI lines of a BGP
+    UPDATE, each only when that part is non-empty, each list capped:
+    one UPDATE can carry hundreds of prefixes.
+
+    :raises ProtocolError: if a part overruns the message; the caller
+        renders this inside a guard.
+    """
+    withdrawn = layer.withdrawn_routes or ()
+    attributes = layer.path_attributes or ()
+    nlri = layer.nlri or ()
+    parts = (
+        (f"Withdrawn ({len(withdrawn)})", [str(p.network) for p in withdrawn]),
+        (
+            "Attributes",
+            [_bgp_attribute_text(a) for a in attributes],
+        ),
+        (f"NLRI ({len(nlri)})", [str(p.network) for p in nlri]),
+    )
+    return [f"{label}: {_capped(items)}" for label, items in parts if items]
+
+
+def _is_whole_table_request(routes: tuple[RIPEntry, ...]) -> bool:
+    """Whether *routes* is RFC 2453 §3.9.1's request for the whole
+    routing table: exactly one entry, address family 0, metric 16."""
+    return (
+        len(routes) == 1
+        and routes[0].afi == 0
+        and routes[0].metric == _RIP_INFINITY
+    )
 
 
 class OutputToPcap(Output):

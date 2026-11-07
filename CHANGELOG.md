@@ -152,6 +152,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   line, since an encrypted TLS 1.2 Finished begins that way one time in
   256; and list lines cap at 16 items with "(+N
   more)", since one packet can carry hundreds of 4-byte SCTP chunks.
+- **Screen renderers for VRRP, HSRP, RIP, OSPF, PIM and BGP**, the
+  routing and first-hop-redundancy protocols an analyst triages a
+  segment by. VRRP (v2/v3, IPv4/IPv6) shows the VRID, priority (0 a
+  master resigning, 255 the address owner), virtual addresses,
+  interval, a verified checksum and VRRPv2's authentication; HSRP the
+  op code, group, state, priority, virtual IP and MAC, timers and the
+  Authentication Data, flagged when it is the default `cisco`; RIP
+  (v1/v2) a request for the whole table, or each route with its prefix,
+  next hop and metric (16 shown as unreachable), and a RIPv2
+  password or RFC 4822 keyed-digest entry; OSPFv2 the router and area,
+  the authentication, the packet checksum (or that cryptographic
+  authentication replaces it), and per message type the Hello's timers,
+  DR/BDR and neighbors, a Database Description's MTU, flags and LSA
+  headers, a request's LSAs, an update's LSAs with each LS checksum
+  verified, and an acknowledgment's headers; PIM a verified checksum and
+  the Hello options, a Register's inner flow (or Null-Register),
+  Register-Stop, every Join/Prune group with its joined and pruned
+  sources and their WC/RPT bits, and Assert metrics; BGP one section
+  per message — an OPEN's version, AS, hold time, ID and parameters,
+  an UPDATE's withdrawn routes, attributes and NLRI (or End-of-RIB), a
+  NOTIFICATION's error and RFC 9003 shutdown communication. Clear-text
+  passwords (VRRPv2 PASS, RIP, OSPF AuType 1), HSRP's Authentication
+  Data and BGP's shutdown communication are sanitized for the terminal
+  and kept on one line (a newline shows as `\n`, so a peer cannot forge
+  a frame header or diagnostic); a raw BGP attribute value shows its
+  first 32 bytes and how many more it holds;
+  BGP and PIM bodies parse on demand and render a `[!]` line instead of
+  raising when malformed; every list caps at 16 items. A PIM Register's
+  inner datagram is read from its IP header alone, not walked, so the
+  frame keeps a single layer budget.
 - **SNI of a ClientHello split across segments.** A ClientHello too
   large for one segment (Chromium's) is a TLS best-effort miss, but its
   first segment usually holds the host name: the decoder now reads it
