@@ -11,8 +11,8 @@ past its request.
 from __future__ import annotations
 
 import pytest
-from netprotocols import DNS, HTTP, TFTP, UDP, IPv4
-from netprotocols.registry import WITHHELD
+from netprotocols import DHCP, DNS, HTTP, TFTP, UDP, DNSOverTCP, IPv4
+from netprotocols.registry import DEFAULT, WITHHELD
 
 from conftest import FIXTURES, read_pcap
 from rootwire import cli
@@ -112,6 +112,21 @@ def test_decoder_names_are_the_exported_protocols() -> None:
 # --- decode options --------------------------------------------------------
 
 
+def test_default_best_effort_set_is_unchanged() -> None:
+    """Without --decode-as the best-effort set is exactly what it was
+    before the flag existed: every port-dispatched class but DNS, DNS
+    over TCP and DHCP. Excluding typed-table classes removes nothing
+    from NETProtocols 2.9's default registry, so a run without the flag
+    classifies every stop as before."""
+    before = {
+        cls
+        for table in ("tcp.port", "udp.port")
+        for cls in DEFAULT.table(table).values()
+        if isinstance(cls, type)
+    } - {DNS, DNSOverTCP, DHCP}
+    assert decode_options().best_effort == before
+
+
 def test_default_options_do_not_decode_http() -> None:
     """Without an override, port 80 ends the walk at TCP."""
     frames = decode_all(HTTP_PCAP, decode_options())
@@ -177,6 +192,10 @@ def test_cli_http_capture_renders_every_message(capsys) -> None:
     assert out.count("[+] HTTP ") == 8
     assert "Malformed" not in out
     assert "malformed:" not in err
+    # The corpus invariants, through the derived registry: every TCP
+    # checksum verifies and every layer has a renderer.
+    assert "mismatch" not in out
+    assert "(no renderer)" not in out
 
 
 def test_cli_without_the_flag_shows_no_http(capsys) -> None:
