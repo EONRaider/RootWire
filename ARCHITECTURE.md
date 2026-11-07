@@ -199,7 +199,11 @@ as exceptions to die on:
   the same port-dispatched class as the last is a miss, not an error,
   the remaining messages left as payload. Any other overflow — an
   extension-header chain that happens to reach port 443, a VXLAN
-  nesting bomb — stays an error.
+  nesting bomb — stays an error. No renderer starts a second walk to
+  get round the cap: a PIM Register encapsulates a whole datagram, and
+  NETProtocols' `PIMRegister.encapsulated` would run `decode_frame`
+  over it, so the PIM renderer decodes only its inner IP header, by
+  itself, for the flow being registered.
 
 ## Outputs
 

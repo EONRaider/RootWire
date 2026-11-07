@@ -38,13 +38,19 @@ options), ICMPv4/v6, IGMP, GRE, TCP (options-aware payload offsets,
 and TCP), DHCP, NTP (mode, stratum, Reference ID or kiss code,
 extension fields, MAC) and TLS (one line per record; a ClientHello's
 **SNI**, cipher-suite count and extensions — and the SNI of a
-ClientHello too large for one segment, read from its first segment).
+ClientHello too large for one segment, read from its first segment),
+plus the routing and redundancy protocols: VRRP and HSRP (virtual
+router, priority, virtual addresses, authentication), RIP (routes with
+metrics, authentication), OSPF (Hello timers and DR/BDR election,
+Database Description, LSA requests, updates and acknowledgments), PIM
+(Hello options, Register, Join/Prune groups and sources, Assert) and
+BGP (OPEN, UPDATE withdrawals, attributes and NLRI, NOTIFICATION).
 Since NETProtocols 2.9 the decoder also walks LLDP, CDP, STP,
-LLC/SNAP, MPLS, VXLAN, IP-in-IP, IPsec ESP/AH, OSPF, PIM, VRRP, BGP,
-STUN, RADIUS, RIP, HSRP and TFTP: those already appear in `--json`
-output with every field, and on screen by name while their dedicated
-renderers land. Every IPv4/ICMPv4/ICMPv6/IGMP/GRE/TCP/UDP/SCTP
-checksum is verified against a recomputation — inside a tunnel against
+LLC/SNAP, MPLS, VXLAN, IP-in-IP, IPsec ESP/AH, STUN, RADIUS and TFTP:
+those already appear in `--json` output with every field, and on
+screen by name while their dedicated renderers land. Every
+IPv4/ICMPv4/ICMPv6/IGMP/GRE/TCP/UDP/SCTP/VRRP/PIM/OSPF checksum (and
+every OSPF LSA's LS checksum) is verified against a recomputation — inside a tunnel against
 the *inner* IP header, behind an IPv6 Routing header against the
 route's final destination, and never over Ethernet padding — flagging
 a mismatch inline (`Checksum: 0x0000 [!] mismatch (expected 0x1a2b)`):
