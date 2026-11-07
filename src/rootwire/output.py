@@ -26,25 +26,34 @@ from typing import IO, Any, cast
 from netprotocols import (
     ARP,
     BGP,
+    CDP,
     DHCP,
     DNS,
     GRE,
     HSRP,
     IGMP,
+    LLC,
+    LLDP,
+    LLDPTLV,
+    MPLS,
     NTP,
     OSPF,
     OSPFLSA,
     PIM,
     RIP,
     SCTP,
+    SNAP,
+    STP,
     TCP,
     TLS,
     UDP,
     VLAN,
     VRRP,
     BGPPathAttribute,
+    CDPAddress,
     DNSOverTCP,
     Ethernet,
+    EtherType,
     ICMPv4,
     ICMPv6,
     IPv4,
@@ -54,6 +63,9 @@ from netprotocols import (
     IPv6Fragment,
     IPv6HopByHopOptions,
     IPv6Routing,
+    LLDPChassisID,
+    LLDPPortID,
+    MPLSLabel,
     OSPFLSAHeader,
     PIMAssert,
     PIMEncodedSource,
@@ -1360,6 +1372,144 @@ class OutputToScreen(Output):
         elif layer.error_data:
             self._print(f"{_II}Data: {len(layer.error_data)} bytes")
 
+    @_render.register
+    def _(self, layer: LLDP, frame: DecodedFrame) -> None:
+        """LLDP: the Chassis ID, Port ID and Time To Live an analyst maps
+        a neighbor by (0 is a shutdown LLDPDU), flagged when the LLDPDU
+        does not open with them as 802.1AB requires; the System Name,
+        Port Description and System Description, sanitized and kept on
+        one line -- the neighbor chose every byte -- and every other TLV
+        by name and size. No accessor here raises."""
+        chassis, port, ttl = layer.chassis_id, layer.port_id, layer.ttl
+        shutdown = " (shutdown)" if layer.is_shutdown else ""
+        self._print(
+            f"{_I}[+] LLDP Chassis {_lldp_id_text(chassis)} | "
+            f"Port {_lldp_id_text(port)} | "
+            f"TTL {'n/a' if ttl is None else f'{ttl}s'}{shutdown}"
+        )
+        if not layer.has_mandatory_tlvs:
+            self._print(
+                f"{_II}[!] Does not open with Chassis ID, Port ID and Time "
+                f"to Live (802.1AB): receivers discard it"
+            )
+        for label, tlv_type in _LLDP_TEXT_TLVS:
+            if (tlv := layer.tlv(tlv_type)) is not None:
+                self._print(f"{_II}{label}: {_wire_text(tlv.value)}")
+        others = [
+            _lldp_tlv_text(tlv)
+            for tlv in layer.tlvs
+            if tlv.type not in _LLDP_SHOWN_TLVS
+        ]
+        if others:
+            self._print(f"{_II}Other TLVs: {_capped(others)}")
+
+    @_render.register
+    def _(self, layer: CDP, frame: DecodedFrame) -> None:
+        """CDP: version, TTL and the checksum, verified over the whole
+        PDU; the Device ID, Port ID and Platform, then the Software
+        Version, each sanitized and kept on one line (a neighbor's
+        free text); the capabilities and addresses; and every other TLV
+        by name. No accessor here raises."""
+        note = _checksum_note(layer)
+        self._print(
+            f"{_I}[+] CDPv{layer.version} | TTL {layer.ttl}s | "
+            f"Checksum: {layer.checksum_hex_str}{note}"
+        )
+        identity = [
+            f"{label}: {_inline_text(text)}"
+            for label, text in (
+                ("Device ID", layer.device_id),
+                ("Port ID", layer.port_id),
+                ("Platform", layer.platform),
+            )
+            if text is not None
+        ]
+        if identity:
+            self._print(f"{_II}{' | '.join(identity)}")
+        if (software := layer.software_version) is not None:
+            self._print(f"{_II}Software: {_cut(_inline_text(software))}")
+        self._print(
+            f"{_II}Capabilities: {_capped(list(layer.capability_names))} | "
+            f"Addresses: {_cdp_addresses_text(layer.addresses)} | "
+            f"Management: {_cdp_addresses_text(layer.management_addresses)}"
+        )
+        others = [
+            f"{tlv.type_name} ({len(tlv.value)} bytes)"
+            for tlv in layer.tlvs
+            if tlv.type not in _CDP_SHOWN_TLVS
+        ]
+        if others:
+            self._print(f"{_II}Other TLVs: {_capped(others)}")
+
+    @_render.register
+    def _(self, layer: STP, frame: DecodedFrame) -> None:
+        """STP/RSTP: the BPDU type and protocol version; for a
+        Configuration or RST BPDU the root and bridge identifiers, root
+        path cost and port, the flags (an RST BPDU's port role and
+        proposal/agreement handshake among them), and the four timers. A
+        Topology Change Notification has none of those fields."""
+        self._print(
+            f"{_I}[+] STP {layer.bpdu_type_name} ({layer.version_name})"
+        )
+        if layer.root_id_str is None:
+            return
+        self._print(
+            f"{_II}Root: {layer.root_id_str} | "
+            f"Cost: {layer.root_path_cost} | "
+            f"Bridge: {layer.bridge_id_str} | "
+            f"Port: {layer.port_priority}.{layer.port_number}"
+        )
+        self._print(f"{_II}Flags: {_stp_flags_text(layer)}")
+        self._print(
+            f"{_II}Message age: {layer.message_age_seconds:g}s | "
+            f"Max age: {layer.max_age_seconds:g}s | "
+            f"Hello: {layer.hello_time_seconds:g}s | "
+            f"Forward delay: {layer.forward_delay_seconds:g}s"
+        )
+
+    @_render.register
+    def _(self, layer: MPLS, frame: DecodedFrame) -> None:
+        """MPLS: the label stack, top first, each entry's label (named
+        when it is a special-purpose one, such as the Entropy Label
+        Indicator), traffic class and TTL, the bottom one marked; and
+        the payload the stack's bottom implies, when it implies one."""
+        labels = [_mpls_label_text(entry) for entry in layer.labels]
+        self._print(
+            f"{_I}[+] MPLS ({len(labels)} label"
+            f"{'' if len(labels) == 1 else 's'}): {_capped(labels)}"
+        )
+        if (payload := layer.payload_ethertype) is not None:
+            self._print(f"{_II}Payload: {payload.display_name}")
+
+    @_render.register
+    def _(self, layer: LLC, frame: DecodedFrame) -> None:
+        """IEEE 802.2 LLC: DSAP and SSAP by name, their group and
+        command/response bits, and the control field's format; or
+        Novell's raw 802.3, whose IPX header begins where an LLC header
+        would."""
+        if layer.is_raw_ipx:
+            self._print(f"{_I}[+] Novell raw 802.3 (IPX, no LLC header)")
+            return
+        group = " (group)" if layer.is_group else ""
+        role = "response" if layer.is_response else "command"
+        self._print(
+            f"{_I}[+] LLC DSAP {layer.dsap:#04x} ({layer.dsap_name}){group}"
+            f" -> SSAP {layer.ssap:#04x} ({layer.ssap_name})"
+        )
+        self._print(
+            f"{_II}Control: {layer.control:#04x} "
+            f"({layer.control_format}-format {role})"
+        )
+
+    @_render.register
+    def _(self, layer: SNAP, frame: DecodedFrame) -> None:
+        """SNAP: the OUI and the protocol ID, named as an EtherType when
+        the OUI makes it one (RFC 1042's 00-00-00, 802.1H's 00-00-F8)."""
+        pid = f"{layer.pid:#06x}"
+        if layer.carries_ethertype:
+            pid += f" ({_ethertype_name(layer.pid)})"
+        self._print(f"{_I}[+] SNAP OUI {layer.oui_str} | PID {pid}")
+
 
 #: Annotations for the VRRP priorities with a meaning of their own
 #: (RFC 3768 §5.3.4, RFC 5798 §5.2.4).
@@ -1445,6 +1595,131 @@ def _bgp_update_lines(layer: BGP) -> list[str]:
         (f"NLRI ({len(nlri)})", [str(p.network) for p in nlri]),
     )
     return [f"{label}: {_capped(items)}" for label, items in parts if items]
+
+
+#: Most characters a free-text field (an LLDP System Description, a CDP
+#: Software Version) shows: either can run to hundreds of bytes, most
+#: of them a vendor banner.
+_TEXT_LIMIT = 128
+
+
+def _cut(text: str) -> str:
+    """*text*, cut at :data:`_TEXT_LIMIT` characters with a count of
+    the rest, in :func:`_capped`'s ``(+N more)`` style."""
+    if len(text) <= _TEXT_LIMIT:
+        return text
+    return f"{text[:_TEXT_LIMIT]}... (+{len(text) - _TEXT_LIMIT} more chars)"
+
+
+def _wire_text(value: bytes) -> str:
+    """A TLV's bytes as display text: ASCII, any other byte shown as
+    ``\\xNN``, sanitized and on one line (see :func:`_inline_text`),
+    and cut (see :func:`_cut`)."""
+    return _cut(_inline_text(value.decode("ascii", errors="backslashreplace")))
+
+
+#: LLDP's Chassis ID and Port ID subtypes that carry a MAC address.
+_LLDP_MAC_SUBTYPES = frozenset({"MAC address"})
+
+
+def _lldp_id_text(identifier: LLDPChassisID | LLDPPortID | None) -> str:
+    """An LLDP Chassis ID or Port ID as ``"MAC address 02:..:0a"`` or
+    ``"Interface name eth0"``: a 6-byte MAC subtype as a MAC, anything
+    else as text (see :func:`_wire_text`); ``"n/a"`` when the TLV is
+    missing or misplaced."""
+    if identifier is None:
+        return "n/a"
+    raw = identifier.id
+    if identifier.subtype_name in _LLDP_MAC_SUBTYPES and len(raw) == 6:
+        return f"{identifier.subtype_name} {raw.hex(':')}"
+    return f"{identifier.subtype_name} {_wire_text(raw)}"
+
+
+#: The LLDP text TLVs shown on their own lines, by label and type.
+_LLDP_TEXT_TLVS = (
+    ("System Name", 5),
+    ("Port Description", 4),
+    ("System Description", 6),
+)
+
+#: LLDP TLV types already shown, left out of the "Other TLVs" line:
+#: End, Chassis ID, Port ID, Time to Live and the text TLVs.
+_LLDP_SHOWN_TLVS = frozenset({0, 1, 2, 3, 4, 5, 6})
+
+#: LLDP's Organizationally Specific TLV type.
+_LLDP_ORG_SPECIFIC = 127
+
+
+def _lldp_tlv_text(tlv: LLDPTLV) -> str:
+    """One LLDP TLV for the "Other TLVs" line: its name and size, and
+    for an Organizationally Specific TLV its OUI and subtype, which
+    say whose extension it is (IEEE 802.1, 802.3, a vendor's)."""
+    if tlv.type == _LLDP_ORG_SPECIFIC and len(tlv.value) >= 4:
+        oui = tlv.value[:3].hex("-")
+        return f"OUI {oui} subtype {tlv.value[3]} ({len(tlv.value)} bytes)"
+    return f"{tlv.type_name} ({len(tlv.value)} bytes)"
+
+
+#: CDP TLV types already shown, left out of the "Other TLVs" line:
+#: Device ID, Addresses, Port ID, Capabilities, Software Version,
+#: Platform and Management Address.
+_CDP_SHOWN_TLVS = frozenset({1, 2, 3, 4, 5, 6, 22})
+
+
+def _cdp_addresses_text(addresses: tuple[CDPAddress, ...] | None) -> str:
+    """A CDP address list: each IPv4/IPv6 address as text, any other
+    protocol by its protocol type, capped; ``"none"`` when absent."""
+    if not addresses:
+        return "none"
+    return _capped(
+        [
+            address.ip
+            if address.ip is not None
+            else f"{address.protocol_type_name} ({len(address.address)} bytes)"
+            for address in addresses
+        ]
+    )
+
+
+def _stp_flags_text(layer: STP) -> str:
+    """The flags of a Configuration or RST BPDU: Topology Change and its
+    Acknowledgment, and an RST BPDU's port role and its proposal,
+    learning, forwarding and agreement bits; ``"none"`` when clear."""
+    bits = [
+        name
+        for name, value in (
+            ("TC", layer.topology_change),
+            ("TCA", layer.topology_change_ack),
+            ("Proposal", layer.proposal),
+            ("Learning", layer.learning),
+            ("Forwarding", layer.forwarding),
+            ("Agreement", layer.agreement),
+        )
+        if value
+    ]
+    if layer.port_role_name is not None:
+        bits.insert(0, f"Role {layer.port_role_name}")
+    return ", ".join(bits) or "none"
+
+
+def _mpls_label_text(entry: MPLSLabel) -> str:
+    """One MPLS label stack entry as ``"16001 (TC 5, TTL 64)"``, a
+    special-purpose label by name too, the bottom of the stack marked
+    ``[S]``."""
+    name = f" {entry.label_name}" if entry.label_name else ""
+    bottom = " [S]" if entry.bottom_of_stack else ""
+    return (
+        f"{entry.label}{name} (TC {entry.traffic_class}, TTL {entry.ttl})"
+        f"{bottom}"
+    )
+
+
+def _ethertype_name(value: int) -> str:
+    """*value*'s EtherType display name (``"IPv4"``), or ``"unknown"``."""
+    try:
+        return EtherType(value).display_name
+    except ValueError:
+        return "unknown"
 
 
 def _is_whole_table_request(routes: tuple[RIPEntry, ...]) -> bool:

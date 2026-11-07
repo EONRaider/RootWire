@@ -44,12 +44,15 @@ router, priority, virtual addresses, authentication), RIP (routes with
 metrics, authentication), OSPF (Hello timers and DR/BDR election,
 Database Description, LSA requests, updates and acknowledgments), PIM
 (Hello options, Register, Join/Prune groups and sources, Assert) and
-BGP (OPEN, UPDATE withdrawals, attributes and NLRI, NOTIFICATION).
-Since NETProtocols 2.9 the decoder also walks LLDP, CDP, STP,
-LLC/SNAP, MPLS, VXLAN, IP-in-IP, IPsec ESP/AH, STUN, RADIUS and TFTP:
+BGP (OPEN, UPDATE withdrawals, attributes and NLRI, NOTIFICATION),
+and the layer-2 protocols: LLDP and CDP (the neighbor's identity,
+port, platform and addresses), STP and RSTP (root and bridge IDs, port
+role, flags and timers), MPLS (the label stack) and LLC/SNAP.
+Since NETProtocols 2.9 the decoder also walks VXLAN, IP-in-IP, IPsec
+ESP/AH, STUN, RADIUS and TFTP:
 those already appear in `--json` output with every field, and on
 screen by name while their dedicated renderers land. Every
-IPv4/ICMPv4/ICMPv6/IGMP/GRE/TCP/UDP/SCTP/VRRP/PIM/OSPF checksum (and
+IPv4/ICMPv4/ICMPv6/IGMP/GRE/TCP/UDP/SCTP/VRRP/PIM/OSPF/CDP checksum (and
 every OSPF LSA's LS checksum) is verified against a recomputation — inside a tunnel against
 the *inner* IP header, behind an IPv6 Routing header against the
 route's final destination, and never over Ethernet padding — flagging

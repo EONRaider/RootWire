@@ -152,6 +152,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   line, since an encrypted TLS 1.2 Finished begins that way one time in
   256; and list lines cap at 16 items with "(+N
   more)", since one packet can carry hundreds of 4-byte SCTP chunks.
+- **Screen renderers for LLDP, CDP, STP, MPLS, LLC and SNAP**, the
+  layer-2 neighbor-discovery, bridging and label-switching headers.
+  LLDP shows the Chassis ID (a MAC as a MAC), Port ID and TTL (0 a
+  shutdown LLDPDU), flags an LLDPDU that does not open with them as
+  802.1AB requires, and shows the System Name, Port Description and
+  System Description, then every other TLV by name or, for an
+  Organizationally Specific one, by OUI and subtype; CDP its version,
+  TTL and verified checksum, the Device ID, Port ID, Platform and
+  Software Version, the capabilities and addresses; STP (802.1D and
+  RSTP) the root and bridge identifiers, root path cost, port, flags
+  (an RST BPDU's port role and proposal/agreement handshake among
+  them) and timers, or a TCN's type alone; MPLS each label of the
+  stack with its traffic class and TTL, special-purpose labels by name
+  and the bottom marked, and the payload the stack implies; LLC its
+  DSAP and SSAP by name, group and command/response bits and control
+  format, or Novell's raw 802.3; SNAP its OUI and protocol ID, named
+  as an EtherType where the OUI makes it one. The neighbor-chosen text
+  of LLDP and CDP is sanitized for the terminal, kept on one line and
+  cut at 128 characters.
 - **Screen renderers for VRRP, HSRP, RIP, OSPF, PIM and BGP**, the
   routing and first-hop-redundancy protocols an analyst triages a
   segment by. VRRP (v2/v3, IPv4/IPv6) shows the VRID, priority (0 a
