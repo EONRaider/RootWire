@@ -303,6 +303,30 @@ class TestOptionRendering:
         text = render(bytes(Packet(_eth(0x0800), ip, tcp)))
         assert "Options: No-Operation, No-Operation, SACK ((100, 200),)" in text
 
+    def test_tcp_options_line_is_capped(self):
+        """Twenty one-byte No-Operation options print the first 16 and
+        a ``(+4 more)`` marker, so a crafted header cannot stretch the
+        Options line without bound."""
+        options = b"\x01" * 20
+        tcp = TCP(
+            src_port=1234,
+            dst_port=80,
+            seq=0,
+            ack=0,
+            data_offset=5 + len(options) // 4,
+            reserved=0,
+            flags=0x010,
+            window=1024,
+            checksum=0,
+            urgent_pointer=0,
+            options=options,
+        )
+        ip = _ipv4(protocol=6, total_length=20 + tcp.header_len)
+        text = render(bytes(Packet(_eth(0x0800), ip, tcp)))
+        line = next(ln for ln in text.splitlines() if "Options:" in ln)
+        assert line.count("No-Operation") == 16
+        assert "(+4 more)" in line
+
 
 class TestChecksumVerification:
     def test_valid_udp_checksum_shows_no_mismatch(self):

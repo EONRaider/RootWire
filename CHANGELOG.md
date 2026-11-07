@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (whatever a queried server answers), and rendering it unsanitized
   would let a crafted response inject ANSI escape sequences into the
   analyst's terminal. Caught by review before merge (#75).
+- DNS question names, answer names and RDATA are now also kept on one
+  line: a label holding a newline used to split the record's line, so a
+  crafted name could forge a RootWire `[!]` line under it (#94).
+- The IPv4 and TCP `Options:` lines now list at most 16 options and a
+  `(+N more)` marker, so a header full of one-byte No-Operation options
+  can no longer stretch the line without bound (#94).
 
 ### Changed
 - **NETProtocols floor raised to 2.9 (`netprotocols>=2.9,<3`; lock
