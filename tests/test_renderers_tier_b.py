@@ -594,7 +594,9 @@ def test_bgp_long_raw_attribute_is_truncated() -> None:
     attribute = b"\x90\x08" + len(value).to_bytes(2, "big") + value
     update = bgp(2, b"\x00\x00" + len(attribute).to_bytes(2, "big") + attribute)
     text = render(bgp_frame(update))
-    assert f"COMMUNITIES {value[:32].hex()}... (200 bytes)" in text
+    assert (
+        f"COMMUNITIES {value[:32].hex()}... (+168 more bytes, 200 in all)"
+    ) in text
     assert value[32:].hex() not in text
 
 

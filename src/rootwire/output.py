@@ -1408,7 +1408,8 @@ def _bgp_attribute_text(attribute: BGPPathAttribute) -> str:
     """One path attribute as ``"NAME value"``: the decoded value for the
     types the library decodes (ORIGIN, NEXT_HOP, MED, LOCAL_PREF), else
     the raw value in hex, its first :data:`_BGP_VALUE_PREVIEW` bytes
-    only, with the full length when it is cut."""
+    only when it is longer, then how many bytes were left out and the
+    full length, in :func:`_capped`'s ``(+N more)`` style."""
     if attribute.value is not None:
         return f"{attribute.type_name} {attribute.value_text}"
     data = attribute.data
@@ -1417,7 +1418,11 @@ def _bgp_attribute_text(attribute: BGPPathAttribute) -> str:
     if len(data) <= _BGP_VALUE_PREVIEW:
         return f"{attribute.type_name} {data.hex()}"
     preview = data[:_BGP_VALUE_PREVIEW].hex()
-    return f"{attribute.type_name} {preview}... ({len(data)} bytes)"
+    omitted = len(data) - _BGP_VALUE_PREVIEW
+    return (
+        f"{attribute.type_name} {preview}... "
+        f"(+{omitted} more bytes, {len(data)} in all)"
+    )
 
 
 def _bgp_update_lines(layer: BGP) -> list[str]:
