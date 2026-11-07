@@ -576,20 +576,40 @@ class TestSanitizedDiagnostics:
 
 
 class TestGuard:
-    """C2: one helper contains every lazily parsed section."""
+    """C2: one helper contains every lazily parsed section. Exercised
+    through the public rendering path: a DNS header that promises one
+    question and carries none parses fine at decode time and only fails
+    when the renderer reads ``questions``."""
 
-    def test_protocol_error_is_contained_and_sanitized(self):
-        stream = io.StringIO()
-        screen = OutputToScreen(display_payload=False, stream=stream)
-        with screen._guard("Records"):
-            screen._print("before")
-            raise TruncatedHeaderError("short \x1b]0;pwned\x07")
-        assert "before" in stream.getvalue()
-        assert "[!] Records malformed: short \\x1b]0;pwned\\x07" in (
-            stream.getvalue()
+    @staticmethod
+    def dns_frame() -> bytes:
+        dns = bytes.fromhex("123401000001000000000000")  # QDCOUNT=1, no body
+        return udp_datagram(53, dns)
+
+    def test_protocol_error_is_contained(self):
+        text = render(self.dns_frame())
+        assert "DNS query (id 0x1234)" in text  # printed before the fault
+        assert "[!] Records malformed: DNS name runs past the message" in text
+        assert text.rstrip().endswith(
+            "Records malformed: DNS name runs past the message"
         )
 
-    def test_other_exceptions_propagate(self):
-        screen = OutputToScreen(display_payload=False, stream=io.StringIO())
-        with pytest.raises(ZeroDivisionError), screen._guard("Records"):
-            _ = 1 / 0
+    def test_guard_message_is_sanitized(self, monkeypatch):
+        def hostile(_: DNS) -> object:
+            raise TruncatedHeaderError("short \x1b]0;pwned\x07")
+
+        monkeypatch.setattr(DNS, "questions", property(hostile))
+        text = render(self.dns_frame())
+        assert "\x1b" not in text and "\x07" not in text
+        assert "[!] Records malformed: short \\x1b]0;pwned\\x07" in text
+
+    def test_other_exceptions_propagate(self, monkeypatch):
+        """Only ProtocolError is contained: anything else is a RootWire
+        or library bug and must surface, not be rendered away."""
+
+        def broken(_: DNS) -> object:
+            raise ZeroDivisionError
+
+        monkeypatch.setattr(DNS, "questions", property(broken))
+        with pytest.raises(ZeroDivisionError):
+            render(self.dns_frame())
