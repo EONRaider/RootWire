@@ -24,11 +24,13 @@ from functools import singledispatchmethod
 from typing import IO, Any, cast
 
 from netprotocols import (
+    AH,
     ARP,
     BGP,
     CDP,
     DHCP,
     DNS,
+    ESP,
     GRE,
     HSRP,
     IGMP,
@@ -40,15 +42,19 @@ from netprotocols import (
     OSPF,
     OSPFLSA,
     PIM,
+    RADIUS,
     RIP,
     SCTP,
     SNAP,
     STP,
+    STUN,
     TCP,
+    TFTP,
     TLS,
     UDP,
     VLAN,
     VRRP,
+    VXLAN,
     BGPPathAttribute,
     CDPAddress,
     DNSOverTCP,
@@ -75,8 +81,10 @@ from netprotocols import (
     PIMRegisterStop,
     Protocol,
     ProtocolError,
+    RADIUSAttribute,
     RIPAuthentication,
     RIPEntry,
+    STUNAddress,
     TCPOption,
     compute,
     verify,
@@ -1514,6 +1522,135 @@ class OutputToScreen(Output):
             pid += f" ({_ethertype_name(layer.pid)})"
         self._print(f"{_I}[+] SNAP OUI {layer.oui_str} | PID {pid}")
 
+    @_render.register
+    def _(self, layer: VXLAN, frame: DecodedFrame) -> None:
+        """VXLAN: the VNI and the flags, the I flag named; reserved bits
+        that are set (RFC 7348 §5 sends them as zero and has receivers
+        ignore them) are noted. The inner Ethernet frame renders as its
+        own layers."""
+        i_flag = " (I)" if layer.flags & VXLAN.I_FLAG else ""
+        self._print(
+            f"{_I}[+] VXLAN VNI {layer.vni} | Flags {layer.flags:#04x}{i_flag}"
+        )
+        reserved_flags = layer.flags & ~VXLAN.I_FLAG
+        if reserved_flags or layer.reserved1 or layer.reserved2:
+            self._print(
+                f"{_II}[~] Reserved bits set: flags {reserved_flags:#04x}, "
+                f"{layer.reserved1:#08x}, {layer.reserved2:#04x} "
+                f"(zero on transmit, RFC 7348 §5)"
+            )
+
+    @_render.register
+    def _(self, layer: ESP, frame: DecodedFrame) -> None:
+        """ESP: the SPI and sequence number, which are all ESP sends in
+        the clear, and the size of the protected rest. Its Next Header
+        sits inside that rest, at an offset only the SA knows, so the
+        walk (and this renderer) stop here."""
+        self._print(
+            f"{_I}[+] ESP SPI {layer.spi_hex_str} | Seq {layer.sequence_number}"
+        )
+        self._print(
+            f"{_II}Protected payload: {len(layer.ciphertext)} bytes "
+            f"(IV, data, padding, trailer and ICV; not decoded)"
+        )
+
+    @_render.register
+    def _(self, layer: AH, frame: DecodedFrame) -> None:
+        """AH, in an IPv4 chain or (:class:`~netprotocols.AHv6`, a
+        subclass) an IPv6 one: the SPI, sequence number and what it
+        protects, tunnel mode named when that is a whole IP packet, and
+        the ICV's size -- never verified, which needs the SA's key."""
+        tunnel = " (tunnel mode)" if layer.next_header in _IP_IN_IP else ""
+        self._print(
+            f"{_I}[+] AH SPI {layer.spi_hex_str} | "
+            f"Seq {layer.sequence_number} | "
+            f"Next: {layer.next_header_name}{tunnel}"
+        )
+        self._print(
+            f"{_II}ICV: {len(layer.icv)} bytes (not verified) | "
+            f"Header: {layer.header_len} bytes"
+        )
+
+    @_render.register
+    def _(self, layer: TFTP, frame: DecodedFrame) -> None:
+        """TFTP: the opcode and its fields -- a request's filename and
+        mode, a DATA's or ACK's block (and a DATA's size), an ERROR's
+        code, name and message -- and a request's or OACK's options.
+        The client chose the filename, mode and options and the sender
+        the message, so each is sanitized, kept on one line and cut. No
+        accessor here raises."""
+        summary = _tftp_summary(layer)
+        self._print(f"{_I}[+] TFTP {layer.opcode_name}{summary}")
+        if layer.options:
+            options = [
+                f"{_cut(_inline_text(name))}={_cut(_inline_text(value))}"
+                for name, value in layer.options
+            ]
+            self._print(f"{_II}Options: {_capped(options)}")
+
+    @_render.register
+    def _(self, layer: RADIUS, frame: DecodedFrame) -> None:
+        """RADIUS: code, identifier and length, the Authenticator, then
+        the attributes, parsed once and guarded (a malformed Length
+        raises): each text attribute (User-Name, Reply-Message, the
+        station IDs, ...) on its own line, sanitized, on one line and
+        cut, and every other attribute by name, with its value when it
+        is an address or a number and its size otherwise. User-Password
+        and CHAP-Password are hidden with the shared secret; only their
+        size is shown."""
+        self._print(
+            f"{_I}[+] RADIUS {layer.code_name} (ID {layer.identifier}) | "
+            f"Length {layer.length}"
+        )
+        self._print(f"{_II}Authenticator: {layer.authenticator.hex()}")
+        with self._guard("RADIUS attributes"):
+            attributes = layer.parsed_attributes
+            texts = [
+                attribute
+                for attribute in attributes
+                if attribute.type in _RADIUS_TEXT_ATTRIBUTES
+            ]
+            # One line each, capped like a list line: one 4096-byte
+            # packet can hold some 2,000 empty Reply-Messages.
+            for attribute in texts[:_LIST_LIMIT]:
+                self._print(
+                    f"{_II}{attribute.type_name}: "
+                    f"{_radius_text(attribute.data)}"
+                )
+            if (extra := len(texts) - _LIST_LIMIT) > 0:
+                self._print(f"{_II}(+{extra} more text attributes)")
+            others = [
+                _radius_attribute_text(attribute)
+                for attribute in attributes
+                if attribute.type not in _RADIUS_TEXT_ATTRIBUTES
+            ]
+            if others:
+                self._print(f"{_II}Attributes: {_capped(others)}")
+
+    @_render.register
+    def _(self, layer: STUN, frame: DecodedFrame) -> None:
+        """STUN: the method and class, the Transaction ID and the
+        FINGERPRINT, verified (a misplaced one flagged); the mapped
+        addresses, ERROR-CODE, SOFTWARE, UNKNOWN-ATTRIBUTES and whether
+        MESSAGE-INTEGRITY is present (it needs the credential's key to
+        verify); and every attribute by name. The sender chose the
+        SOFTWARE and the error's reason phrase, so both are sanitized,
+        kept on one line and cut. Those accessors never raise; the full
+        attribute list parses on demand and is guarded."""
+        self._print(
+            f"{_I}[+] STUN {layer.message_type_name} | "
+            f"Transaction {layer.transaction_id.hex()} | "
+            f"Fingerprint: {_stun_fingerprint_text(layer)}"
+        )
+        for line in _stun_detail_lines(layer):
+            self._print(f"{_II}{line}")
+        with self._guard("STUN attributes"):
+            names = [
+                attribute.type_name for attribute in layer.parsed_attributes
+            ]
+            if names:
+                self._print(f"{_II}Attributes: {_capped(names)}")
+
 
 #: Annotations for the VRRP priorities with a meaning of their own
 #: (RFC 3768 §5.3.4, RFC 5798 §5.2.4).
@@ -1734,6 +1871,114 @@ def _is_whole_table_request(routes: tuple[RIPEntry, ...]) -> bool:
         and routes[0].afi == 0
         and routes[0].metric == _RIP_INFINITY
     )
+
+
+#: The Next Header values that make AH (or any IP header) carry a whole
+#: IP packet: IPv4 (4) and IPv6 (41) encapsulation -- tunnel mode.
+_IP_IN_IP = frozenset({4, 41})
+
+
+def _tftp_summary(layer: TFTP) -> str:
+    """The fields after a TFTP opcode on its header line, with a leading
+    space: ``" boot.bin (octet)"``, ``" block 3 (512 bytes)"``,
+    ``" block 3"``, ``" 1 (File not found): no such file"``; ``""``
+    for an OACK, whose options have a line of their own."""
+    if layer.filename is not None:
+        mode = _cut(_inline_text(layer.mode or ""))
+        return f" {_cut(_inline_text(layer.filename))} ({mode})"
+    if layer.data is not None:
+        return f" block {layer.block} ({len(layer.data)} bytes)"
+    if layer.block is not None:
+        return f" block {layer.block}"
+    if layer.error_code is not None:
+        message = _cut(_inline_text(layer.error_message or ""))
+        return f" {layer.error_code} ({layer.error_name}): {message}"
+    return ""
+
+
+#: RADIUS attribute types whose Value is text (RFC 2865 §5, RFC 2866
+#: §5.5): User-Name, Reply-Message, Called-Station-Id,
+#: Calling-Station-Id, NAS-Identifier and Acct-Session-Id.
+_RADIUS_TEXT_ATTRIBUTES = frozenset({1, 18, 30, 31, 32, 44})
+
+
+def _radius_text(data: bytes) -> str:
+    """A RADIUS text attribute's Value for display: UTF-8 (RFC 2865 §5),
+    any undecodable byte shown as ``\\xNN``, sanitized, on one line and
+    cut -- the NAS or the user chose every byte."""
+    return _cut(_inline_text(data.decode("utf-8", errors="backslashreplace")))
+
+
+def _radius_attribute_text(attribute: RADIUSAttribute) -> str:
+    """One non-text RADIUS attribute for the "Attributes" line: its name
+    and value when NETProtocols reads it as an address or a number
+    (``"NAS-Port 7"``), its name and size otherwise -- a User-Password
+    or CHAP-Password included, hidden with the shared secret."""
+    value = attribute.value
+    if isinstance(value, (ipaddress.IPv4Address, int)):
+        return f"{attribute.type_name} {value}"
+    return f"{attribute.type_name} ({len(attribute.data)} bytes)"
+
+
+#: The size of a STUN FINGERPRINT's value: a CRC-32.
+_STUN_FINGERPRINT_LEN = 4
+
+
+def _stun_fingerprint_text(layer: STUN) -> str:
+    """A STUN message's FINGERPRINT as hex, flagged when it does not
+    verify (see :func:`_checksum_note`); a FINGERPRINT that is not the
+    last attribute, which RFC 8489 §14.7 does not define and receivers
+    reject, flagged as misplaced, and one whose value is not 4 bytes
+    flagged as invalid (NETProtocols cannot compute the value either
+    should have); ``"none"`` without one."""
+    if (fingerprint := layer.fingerprint) is not None:
+        return f"{fingerprint:#010x}{_checksum_note(layer)}"
+    if (found := layer.attribute(STUN.FINGERPRINT)) is None:
+        return "none"
+    if len(found.value) != _STUN_FINGERPRINT_LEN:
+        return f"[!] invalid ({len(found.value)} bytes, not 4, RFC 8489 §14.7)"
+    return "[!] misplaced (not the last attribute, RFC 8489 §14.7)"
+
+
+def _stun_address_text(address: STUNAddress) -> str:
+    """A STUN address and port: ``"10.0.0.1:3478"``, or
+    ``"[2001:db8::1]:3478"`` for IPv6."""
+    if address.family_name == "IPv6":
+        return f"[{address.address}]:{address.port}"
+    return f"{address.address}:{address.port}"
+
+
+def _stun_detail_lines(layer: STUN) -> list[str]:
+    """The STUN attribute lines that NETProtocols reads without raising:
+    the mapped addresses, ERROR-CODE (its reason sanitized, on one line
+    and cut, and an out-of-range code shown as invalid), SOFTWARE
+    (likewise), UNKNOWN-ATTRIBUTES' types, and MESSAGE-INTEGRITY's
+    presence."""
+    lines: list[str] = []
+    addresses = [
+        f"{label}: {_stun_address_text(address)}"
+        for label, address in (
+            ("XOR-Mapped", layer.xor_mapped_address),
+            ("Mapped", layer.mapped_address),
+        )
+        if address is not None
+    ]
+    if addresses:
+        lines.append(" | ".join(addresses))
+    if (reason := layer.error_reason) is not None:
+        code = layer.error_code
+        lines.append(
+            f"Error: {'invalid code' if code is None else code} "
+            f"{_cut(_inline_text(reason))}"
+        )
+    if (software := layer.software) is not None:
+        lines.append(f"Software: {_cut(_inline_text(software))}")
+    if unknown := layer.unknown_attributes:
+        kinds = [f"{kind:#06x}" for kind in unknown]
+        lines.append(f"Unknown attributes: {_capped(kinds)}")
+    if layer.message_integrity is not None:
+        lines.append("Message-Integrity: present (HMAC-SHA1, not verified)")
+    return lines
 
 
 class OutputToPcap(Output):

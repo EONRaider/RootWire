@@ -152,6 +152,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   line, since an encrypted TLS 1.2 Finished begins that way one time in
   256; and list lines cap at 16 items with "(+N
   more)", since one packet can carry hundreds of 4-byte SCTP chunks.
+- **Screen renderers for VXLAN, ESP, AH, TFTP, RADIUS and STUN**, the
+  tunnels, IPsec headers and UDP services. VXLAN shows its VNI and
+  flags, and notes reserved bits that are set; ESP its SPI, sequence
+  number and the size of the protected rest (its Next Header is
+  encrypted, so the walk stops there); AH, under IPv4 or IPv6, its SPI,
+  sequence number and what it protects, tunnel mode named, and the
+  ICV's size (never verified: that needs the SA's key). IP-in-IP needs
+  no renderer of its own: the inner IPv4 or IPv6 header renders as one.
+  TFTP shows a request's filename, mode and options, a DATA's or ACK's
+  block, an ERROR's code, name and message, and an OACK's options;
+  RADIUS its code, identifier, length and Authenticator, each text
+  attribute (User-Name, Reply-Message, the station IDs,
+  Acct-Session-Id) on its own line, and every other attribute by name
+  with its address or number, a hidden password by size only; STUN its
+  method and class, Transaction ID and verified FINGERPRINT (a
+  misplaced one flagged), the mapped addresses, ERROR-CODE, SOFTWARE,
+  UNKNOWN-ATTRIBUTES and whether MESSAGE-INTEGRITY is present. All
+  sender-chosen text is sanitized for the terminal, kept on one line
+  and cut at 128 characters, and a malformed RADIUS or STUN attribute
+  list is reported as `[!] ... malformed` without hiding the header.
 - **Screen renderers for LLDP, CDP, STP, MPLS, LLC and SNAP**, the
   layer-2 neighbor-discovery, bridging and label-switching headers.
   LLDP shows the Chassis ID (a MAC as a MAC), Port ID and TTL (0 a
