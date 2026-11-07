@@ -570,8 +570,8 @@ class TestSanitizedDiagnostics:
         assert "\\x1b[2Jlabel\\x0d" in text
 
     def test_l7_miss_line_is_sanitized(self):
-        text = render(self.frame(l7_miss="odd \x9b31m‮"))
-        assert "\x9b" not in text and "‮" not in text
+        text = render(self.frame(l7_miss="odd \x9b31m\u202e"))
+        assert "\x9b" not in text and "\u202e" not in text
         assert "\\x9b31m\\u202e" in text
 
 

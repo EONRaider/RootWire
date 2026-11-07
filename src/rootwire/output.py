@@ -298,6 +298,17 @@ class OutputToScreen(Output):
         )
         for layer in frame.layers:
             self._render(layer, frame)
+        self._render_diagnostics(frame)
+        if self._display_payload and frame.payload:
+            text = _sanitize_for_terminal(frame.payload.decode(errors="ignore"))
+            self._print(f"{_I}[+] Payload ({len(frame.payload)} bytes):")
+            self._print(f"{_II}{text.replace(chr(10), chr(10) + _II)}")
+        self._print("")
+
+    def _render_diagnostics(self, frame: DecodedFrame) -> None:
+        """The frame-level ``[!]``/``[~]`` lines that follow its layers:
+        a decode error, a best-effort application miss, truncation, and
+        a lying IPv4 length. Prints nothing for a healthy frame."""
         # A lying IPv4 total_length is reported once, by the specific
         # line below: the walk's own error for it is the same fault
         # (see DecodedFrame.malformed_length). Library messages can quote
@@ -326,11 +337,6 @@ class OutputToScreen(Output):
                 f"is smaller than its header ({ip.header_len} bytes); "
                 f"upper layers not decoded"
             )
-        if self._display_payload and frame.payload:
-            text = _sanitize_for_terminal(frame.payload.decode(errors="ignore"))
-            self._print(f"{_I}[+] Payload ({len(frame.payload)} bytes):")
-            self._print(f"{_II}{text.replace(chr(10), chr(10) + _II)}")
-        self._print("")
 
     @singledispatchmethod
     def _render(self, layer: Protocol, frame: DecodedFrame) -> None:
