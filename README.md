@@ -47,12 +47,15 @@ Database Description, LSA requests, updates and acknowledgments), PIM
 BGP (OPEN, UPDATE withdrawals, attributes and NLRI, NOTIFICATION),
 and the layer-2 protocols: LLDP and CDP (the neighbor's identity,
 port, platform and addresses), STP and RSTP (root and bridge IDs, port
-role, flags and timers), MPLS (the label stack) and LLC/SNAP.
-Since NETProtocols 2.9 the decoder also walks VXLAN, IP-in-IP, IPsec
-ESP/AH, STUN, RADIUS and TFTP:
-those already appear in `--json` output with every field, and on
-screen by name while their dedicated renderers land. Every
-IPv4/ICMPv4/ICMPv6/IGMP/GRE/TCP/UDP/SCTP/VRRP/PIM/OSPF/CDP checksum (and
+role, flags and timers), MPLS (the label stack) and LLC/SNAP, and the
+tunnels and UDP services: VXLAN (the VNI; the inner frame renders in
+full, as does an IP-in-IP packet's inner header), IPsec ESP and AH
+(SPI, sequence number, what AH protects and whether it is tunnel
+mode), TFTP (filename, mode, options, blocks, errors), RADIUS (code,
+User-Name and the other text attributes, addresses) and STUN (mapped
+addresses, errors, SOFTWARE, MESSAGE-INTEGRITY). Every
+IPv4/ICMPv4/ICMPv6/IGMP/GRE/TCP/UDP/SCTP/VRRP/PIM/OSPF/CDP checksum and
+STUN FINGERPRINT (and
 every OSPF LSA's LS checksum) is verified against a recomputation — inside a tunnel against
 the *inner* IP header, behind an IPv6 Routing header against the
 route's final destination, and never over Ethernet padding — flagging
