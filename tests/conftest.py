@@ -215,8 +215,11 @@ def igmpv3_report_frame() -> bytes:
 
 @pytest.fixture
 def unknown_ethertype_frame() -> bytes:
-    """An LLDP frame: the library does not decode past Ethernet."""
-    return bytes(_eth(0x88CC)) + b"\x02\x07\x04\x00\x07\x0d\xaf\xf4\x54"
+    """A frame with EtherType 0x88B5 (IEEE 802 Local Experimental
+    EtherType 1), which no decoder claims, so the walk ends at Ethernet.
+    This used to be LLDP (0x88CC), until NETProtocols 2.3 started
+    decoding LLDP by default."""
+    return bytes(_eth(0x88B5)) + b"\x02\x07\x04\x00\x07\x0d\xaf\xf4\x54"
 
 
 @pytest.fixture

@@ -134,25 +134,55 @@ as exceptions to die on:
 
 - **Unknown protocol?** The library's `next_protocol()` returns
   `None`, the chain ends, and the remaining bytes become the frame's
-  payload. An LLDP frame renders as Ethernet plus payload instead of
-  an error. A VLAN tag, by contrast, is not an unknown protocol at
-  all: it is its own decoded layer (`Ethernet / VLAN / ...`), and the
-  chain walks straight through it into whatever it encapsulates,
-  including nested (QinQ) tags.
+  payload. A frame with an unregistered EtherType renders as Ethernet
+  plus payload instead of an error. A VLAN tag, by contrast, is not an
+  unknown protocol at all: it is its own decoded layer
+  (`Ethernet / VLAN / ...`), and the chain walks straight through it
+  into whatever it encapsulates, including nested (QinQ) tags.
+- **A port that only suggests a protocol?** NETProtocols dispatches
+  TLS (443), BGP (179), STUN (3478), NTP (123), RADIUS (1812/1813),
+  HSRP (1985), TFTP (69), RIP (520) and VXLAN (4789) on the port
+  number alone, and calls that decoder whatever the segment holds. A
+  bare ACK, a segment continuing a record begun in an earlier one, or
+  another service on the port then fails to decode — which says
+  nothing about the frame's health. `decoder.py` derives that set of
+  port-dispatched classes from the library's default registry at
+  import (minus DNS, DNS-over-TCP and DHCP, whose malformations
+  predate the upgrade and stay real signal) and records a stop inside
+  one as `frame.l7_miss`, not `frame.error`: no `[!]`, not counted as
+  malformed, the undecoded bytes left as payload, and a `[~]` note on
+  screen only when there are bytes to explain. Checking the stopping
+  *class*, not where in the frame the stop happened, is what keeps a
+  truncated DNS header on port 53 an error.
 - **Malformed header?** The library raises a typed `ProtocolError`
   (truncated buffer, lying length field). `decode_frame()` calls the
   library's own `decode_frame()` with `lax=True`, which keeps the
   layers that did decode instead of propagating the exception;
   RootWire's `decode_frame()` records the diagnostic on `frame.error`.
-  The capture continues.
+  The capture continues. A declared length shorter than its own header
+  (an IPv4 Total Length below `ihl * 4`, a UDP Length of 1 to 7) stops
+  the walk at that header, since it bounds every layer after it; the
+  IPv4 case is also flagged as `frame.malformed_length` and rendered
+  once.
+- **Padding and FCS?** The walk ends every buffer at the tightest end
+  the frame's length fields declare; the bytes past it are the
+  library's `packet.trailer`, kept as `frame.trailer` and out of both
+  `frame.payload` and every checksum input.
 - **Truncated datagram?** If the IP layer declares more bytes than
   were captured, `frame.truncated` is set and the renderer says so.
-- **Crafted amplification?** The decode chain is capped at 16 layers
-  per frame. IPv6 extension headers chain legitimately (an MLD report
-  is `Ethernet / IPv6 / Hop-by-Hop / ICMPv6`), but a 65,535-byte frame
-  of back-to-back 8-byte extension headers would otherwise decode
-  ~8,100 layer objects. Past the cap, the frame is diagnosed and the
-  capture moves on.
+- **Crafted amplification?** The decode chain is capped at 32 layers
+  per frame, the library's own default. IPv6 extension headers chain
+  legitimately (an MLD report is `Ethernet / IPv6 / Hop-by-Hop /
+  ICMPv6`), but a 65,535-byte frame of back-to-back 8-byte extension
+  headers would otherwise decode ~8,100 layer objects. Past the cap,
+  the frame is diagnosed and the capture moves on. BGP, STUN over TCP
+  and TLS decode one layer per message or record, and a valid segment
+  can hold more than the cap leaves room for (76 BGP KEEPALIVEs fit in
+  1448 bytes): an overflow where the next layer would be another of
+  the same port-dispatched class as the last is a miss, not an error,
+  the remaining messages left as payload. Any other overflow — an
+  extension-header chain that happens to reach port 443, a VXLAN
+  nesting bomb — stays an error.
 
 ## Outputs
 
@@ -164,13 +194,26 @@ plus an optional `close()` for resources at end of capture:
   one decorated method, and layers without one fall back to a generic
   line instead of crashing. Renderers receive the **whole frame**, not
   just their layer — the ICMP renderer prints the enclosing IP
-  addresses via `frame.layer(IPv4)`, context a layer-only API could
-  not provide. (A previous implementation dispatched on method-name
+  addresses, context a layer-only API could not provide. "Enclosing"
+  means the *nearest* IP header before the layer (`_enclosing_ip`),
+  together with any IPv6 Routing header with segments left between
+  them: an inner TCP segment in a VXLAN or AH tunnel is checksummed
+  over the inner datagram's pseudo-header, and one behind a Routing
+  header over the route's final destination, exactly as
+  `Packet.with_checksums()` fills them. Sections a layer parses
+  lazily (DNS records, options, IGMP group records, ...) render inside
+  `self._guard("...")`, which turns a `ProtocolError` into a `[!] ...
+  malformed` line instead of an exception; every string that came off
+  the wire, library diagnostics included, passes through
+  `_sanitize_for_terminal` first. (A previous implementation dispatched on method-name
   strings; one typo'd property name crashed the display on every IPv6
   frame. Type dispatch removed that class of bug.)
 - **`OutputToNDJSON`** (`--json`) prints one JSON object per frame:
-  layer fields straight from the dataclasses, bytes hex-encoded, one
-  line each, flushed. stdout carries *nothing else* — the banner, the
+  layer fields straight from the dataclasses, `bytes` hex-encoded at
+  any depth (LLDP and CDP keep theirs inside TLV tuples) by a
+  `json.dumps` `default=` hook, one line each, flushed. Each layer's
+  `"type"` is its class name; a wire field of its own named `type`
+  (ICMP, IGMP, BGP, ...) is emitted as `"type_"`. stdout carries *nothing else* — the banner, the
   statistics, and the abort notice all live on stderr — so
   `rootwire --json -r file.pcap | jq .` consumes cleanly.
 - **`OutputToPcap`** (`-w`) writes `frame.raw` byte-exactly with its
@@ -188,11 +231,12 @@ renders NDJSON to stdout while archiving every frame to disk.
 ## Testing without root
 
 The suite runs recorded traffic, not sockets. Its backbone is a
-**65-frame corpus of real captured frames** (12 scenarios — see
-[tests/fixtures/MANIFEST.md](tests/fixtures/MANIFEST.md)) shared with
-the NETProtocols repository, where every frame's checksums were
+**617-frame corpus of real captured frames** (42 captures — see
+[tests/fixtures/MANIFEST.md](tests/fixtures/MANIFEST.md)) vendored from
+the NETProtocols 2.9.0 repository, where every frame's checksums were
 verified before being committed. Corpus tests drive each frame through
-decode *and* render; the pcap tests replay every corpus file through
+decode, render *and* NDJSON, and assert that no rendered checksum
+reads as a mismatch, since upstream guarantees every one verifies; the pcap tests replay every corpus file through
 `read_captures` and cross-validate it against an independent reader; the
 rest covers payload offsets with TCP options, unknown EtherTypes,
 truncation diagnostics, fragment labeling, NDJSON schema and stdout

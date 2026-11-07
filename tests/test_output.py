@@ -86,7 +86,7 @@ class TestOutputToScreen:
     def test_unknown_and_truncated_diagnostics(
         self, unknown_ethertype_frame, truncated_frame
     ):
-        assert "EtherType: 0x88cc" in render(unknown_ethertype_frame)
+        assert "EtherType: 0x88b5" in render(unknown_ethertype_frame)
         truncated_text = render(truncated_frame)
         assert "Malformed header: TCP" in truncated_text
         assert "Truncated" in truncated_text
@@ -95,6 +95,10 @@ class TestOutputToScreen:
         text = render(ipv4_udp(total_length=4))
         assert "Malformed: IPv4 total_length (4)" in text
         assert "smaller than its header (20 bytes)" in text
+        # One diagnosis, not two: the walk's own total_length error is
+        # the same fault and is not repeated as "Malformed header".
+        assert "Malformed header" not in text
+        assert text.count("[!] Malformed") == 1
 
     def test_dhcp_rendering(self, dhcp_frame):
         text = render(dhcp_frame)

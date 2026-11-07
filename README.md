@@ -28,21 +28,30 @@ JSON:
         Options: Maximum Segment Size (1460), SACK Permitted, Timestamps (3644437524, 0), No-Operation, Window Scale (7)
 ```
 
-The decoder covers Ethernet (802.1Q VLAN tags, including nested QinQ
-tagging), ARP, IPv4 (**decoded options** and fragments), IPv6
-**including extension headers** (an MLD report renders its full
+The screen renderer covers Ethernet (802.1Q VLAN tags, including
+nested QinQ tagging), ARP, IPv4 (**decoded options** and fragments),
+IPv6 **including extension headers** (an MLD report renders its full
 Hop-by-Hop chain) and **Neighbor Discovery** (a Router/Neighbor
 Solicitation or Advertisement shows its target address and link-layer
-options), ICMPv4/v6, TCP (options-aware payload offsets, **decoded
-options**) and UDP. Every IPv4/ICMPv4/ICMPv6/TCP/UDP checksum is
-verified against a recomputation, flagging a mismatch inline
-(`Checksum: 0x0000 [!] mismatch (expected 0x1a2b)`) — a real signal
-for corrupted or spoofed traffic, silent for a non-reassembled
-fragment, where the wire checksum covers a datagram RootWire never
-rebuilds. Malformed or truncated frames are diagnosed instead of
-crashing the capture, unknown protocols end the chain gracefully, and
-a 16-layer cap keeps crafted extension-header stacks from amplifying —
-the capture survives whatever the network delivers.
+options), ICMPv4/v6, IGMP, GRE, TCP (options-aware payload offsets,
+**decoded options**), UDP, DNS (over UDP and TCP) and DHCP. Since
+NETProtocols 2.9 the decoder also walks LLDP, CDP, STP, LLC/SNAP,
+MPLS, VXLAN, IP-in-IP, IPsec ESP/AH, OSPF, PIM, VRRP, SCTP, BGP, TLS,
+STUN, NTP, RADIUS, RIP, HSRP and TFTP: those already appear in
+`--json` output with every field, and on screen by name while their
+dedicated renderers land. Every IPv4/ICMPv4/ICMPv6/IGMP/GRE/TCP/UDP
+checksum is verified against a recomputation — inside a tunnel against
+the *inner* IP header, behind an IPv6 Routing header against the
+route's final destination, and never over Ethernet padding — flagging
+a mismatch inline (`Checksum: 0x0000 [!] mismatch (expected 0x1a2b)`):
+a real signal for corrupted or spoofed traffic, silent for a
+non-reassembled fragment, where the wire checksum covers a datagram
+RootWire never rebuilds. Malformed or truncated frames are diagnosed
+instead of crashing the capture, unknown protocols end the chain
+gracefully, a bare ACK on a well-known port such as 443 is not
+mistaken for a malformed TLS record, and a 32-layer cap keeps crafted
+extension-header stacks from amplifying — the capture survives
+whatever the network delivers.
 
 ## Installation
 
@@ -118,7 +127,7 @@ captures and how to add an output, is in
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
 Everything except the raw socket runs on any OS, so the test suite —
-which includes a 65-frame corpus of real captured traffic replayed
+which includes a 617-frame corpus of real captured traffic replayed
 through the whole pipeline — needs neither root nor Linux:
 
 ```

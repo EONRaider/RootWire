@@ -30,18 +30,32 @@ class DecodedFrame:
     :param length: Number of bytes captured for this frame.
     :param layers: The successfully decoded protocol headers, outermost
         first.
-    :param payload: The bytes following the last decoded header.
+    :param payload: The bytes following the last decoded header, up to
+        the end the frame's own length fields declare (see *trailer*).
     :param truncated: True when the enclosed IP datagram declares more
         bytes than were captured (the payload is incomplete).
     :param malformed_length: True when a decoded IPv4 header declares a
         ``total_length`` smaller than the header itself — an impossible
         value. A ``total_length`` of 0 is exempt: it is the sentinel
         large-send offload (TSO) leaves in locally captured frames, not
-        corruption. Upper layers are still decoded and shown; this only
-        adds the diagnosis.
+        corruption. The decode walk stops at such a header (its declared
+        length bounds nothing sensible), so *error* is always set
+        alongside this, with the library's wording of the same fault;
+        this flag is its structured form.
     :param error: Diagnostic message when the decode chain aborted on a
         malformed header, else ``None``. The layers decoded before the
         failure are preserved.
+    :param l7_miss: Why a *best-effort*, port-dispatched application
+        decoder (TLS on 443, BGP on 179, NTP on 123, ...) did not
+        decode the payload, else ``None``. Not an error: a bare ACK or a
+        mid-stream continuation segment on a well-known port is ordinary
+        traffic, not a malformed frame. The bytes that decoder refused
+        are left in *payload*. Never set together with *error*.
+    :param trailer: Bytes past the end the frame's length fields
+        declare (IPv4 Total Length, IPv6 Payload Length, UDP Length, an
+        802.3 Length): Ethernet padding or a captured FCS. They belong
+        to no layer, so they are kept out of *payload* and out of every
+        checksum.
     :param raw: The exact captured bytes of the whole frame — the same
         object the decoder received, so keeping it costs no copy. This
         is what pcap output writes.
@@ -56,6 +70,8 @@ class DecodedFrame:
     truncated: bool = False
     malformed_length: bool = False
     error: str | None = None
+    l7_miss: str | None = None
+    trailer: bytes = b""
     raw: bytes = b""
 
     def layer(self, protocol: type[_P]) -> _P | None:

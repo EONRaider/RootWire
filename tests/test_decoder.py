@@ -1,7 +1,7 @@
 from netprotocols import ARP, TCP, UDP, Ethernet, ICMPv4, ICMPv6, IPv4, IPv6
 
 from conftest import ipv4_udp
-from rootwire.decoder import decode_frame
+from rootwire.decoder import _MAX_LAYERS, decode_frame
 
 
 def decode(data: bytes):
@@ -68,17 +68,18 @@ class TestDecodeFrame:
         assert frame.truncated
 
     def test_ipv4_total_length_below_header_is_flagged(self):
-        """A total_length smaller than the 20-byte header is impossible;
-        it is diagnosed, and upper layers are still decoded (the walk runs
-        off header_len, not total_length)."""
+        """A total_length smaller than the 20-byte header is impossible.
+
+        Since NETProtocols 2.3 the walk bounds every later layer by the
+        declared length and rejects one shorter than its own header, so
+        the IPv4 header is kept, the layers inside it are not decoded,
+        and both signals describe the one fault."""
         frame = decode(ipv4_udp(total_length=4))
         assert frame.malformed_length
-        assert [type(layer) for layer in frame.layers] == [
-            Ethernet,
-            IPv4,
-            UDP,
-        ]
-        assert frame.error is None
+        assert [type(layer) for layer in frame.layers] == [Ethernet, IPv4]
+        assert frame.error is not None
+        assert "total length 4" in frame.error
+        assert frame.l7_miss is None
         assert not frame.truncated
 
     def test_ipv4_total_length_zero_is_not_flagged(self):
@@ -142,6 +143,9 @@ class TestChainHardening:
             ethertype=0x86DD,
         )
         frame = decode(bytes(eth) + bytes(ip) + chain)
-        assert len(frame.layers) == 16
+        assert len(frame.layers) == _MAX_LAYERS == 32
         assert frame.error is not None
-        assert "still going after 16 headers" in frame.error
+        assert "still going after 32 headers" in frame.error
+        # Not a best-effort application miss: hop-by-hop headers are not
+        # a port-dispatched protocol, so the overflow is a real error.
+        assert frame.l7_miss is None

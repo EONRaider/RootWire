@@ -19,7 +19,7 @@ uv sync
 ```
 
 Live capture opens a raw socket and therefore needs root on Linux, but nothing
-in the test suite does. The 65-frame corpus of real captured traffic is
+in the test suite does. The 617-frame corpus of real captured traffic is
 replayed through the whole pipeline from disk, so the full suite runs
 unprivileged on any operating system.
 
@@ -77,7 +77,7 @@ Beyond that:
 
 RootWire promises that malformed or truncated frames are diagnosed instead of
 crashing the capture: unknown protocols end the decode chain gracefully, and a
-16-layer cap keeps crafted extension-header stacks from amplifying. That promise
+32-layer cap keeps crafted extension-header stacks from amplifying. That promise
 is the reason the parser is defensive everywhere it touches attacker-controlled
 bytes.
 

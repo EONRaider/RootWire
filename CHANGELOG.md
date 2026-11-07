@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Security
+- **Library diagnostics are sanitized before they reach the terminal.**
+  The `[!] Malformed header: ...` line and every `[!] ... malformed`
+  line printed for a lazily parsed section now pass through the same
+  control-character neutralization as payload text: NETProtocols'
+  error messages can quote wire bytes, and an attacker-chosen byte
+  string must never reach the analyst's terminal raw. The new `[~]`
+  best-effort-miss line (below) is sanitized the same way.
 - The new DNS renderer (below) now neutralizes terminal control
   characters in question/answer names and RDATA, the same way `-d`'s
   payload display already does — a DNS name is fully attacker-controlled
@@ -15,6 +22,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   analyst's terminal. Caught by review before merge (#75).
 
 ### Changed
+- **NETProtocols floor raised to 2.9 (`netprotocols>=2.9,<3`; lock
+  2.2.1 → 2.9.0).** The library now decodes LLDP, CDP, STP, LLC/SNAP,
+  MPLS, VXLAN, IP-in-IP, IPsec ESP/AH, OSPF, PIM, VRRP, SCTP, BGP, TLS,
+  STUN, NTP, RADIUS, RIP, HSRP and TFTP on its default dispatch, so
+  frames that used to end at Ethernet, IP or the transport now carry
+  those layers: in full in `--json`, and by name on screen until their
+  renderers land. An LLDP frame (EtherType 0x88CC) is no longer
+  "Ethernet plus payload".
+- **Best-effort application decoders are no longer mistaken for
+  malformed frames.** 2.3+ dispatches TLS (443), BGP (179), STUN (3478),
+  NTP (123), RADIUS (1812/1813), HSRP (1985), TFTP (69), RIP (520) and
+  VXLAN (4789) on the port alone, and calls the decoder on whatever the
+  segment holds; every bare ACK and continuation segment on those ports
+  then raised, which RootWire recorded as `frame.error` and counted as
+  malformed. A stop inside one of those classes — derived from the
+  library's registry at import, not hardcoded — is now recorded as the
+  new `DecodedFrame.l7_miss`: no `[!]`, not counted as malformed, the
+  undecoded bytes left as payload, and a `[~] Payload left undecoded`
+  note only when there are bytes to explain. DNS, DNS-over-TCP and DHCP
+  are deliberately excluded: their malformations predate the upgrade and
+  remain errors.
+- **Layer cap raised from 16 to 32**, the library's own default. BGP,
+  STUN over TCP and TLS decode one layer per message or record, and a
+  valid segment holds dozens; at 16, ordinary dense BGP/TLS traffic was
+  diagnosed as malformed. An overflow where the next layer is another
+  of the same port-dispatched class as the last is a best-effort miss;
+  any other overflow (an extension-header chain, a VXLAN nesting bomb)
+  is still an error, now reading "chain still going after 32 headers".
+- **A lying length now stops the walk.** The library bounds every layer
+  by the declared IPv4 Total Length / UDP Length and rejects one
+  shorter than its own header, so for an IPv4 `total_length` below
+  `ihl * 4` the IPv4 layer still renders but the layers inside it are
+  no longer decoded (previously they were, off `ihl`), and
+  `frame.error` is set alongside `frame.malformed_length`. The two are
+  one fault: stats count it once and the screen prints the single
+  specific line, now ending "upper layers not decoded". A UDP Length of
+  1 to 7 is likewise an error at UDP. `total_length == 0` (TSO) stays
+  exempt. Restoring the inner layers for display is left for later.
+- **Ethernet padding and a captured FCS are split out as
+  `DecodedFrame.trailer`** (the library's `packet.trailer`) instead of
+  being part of `frame.payload`, so `-d` no longer prints padding as
+  payload. NDJSON reports its length as the new `trailer_len`.
+- **NDJSON records gain `l7_miss` and `trailer_len`.**
 - **`decoder.py` now delegates its chain walk to `netprotocols.decode_frame()`
   instead of hand-rolling the same loop the library has shipped since
   2.0.** No behavior change for well-formed frames. The layer-cap
@@ -86,6 +136,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still shows its name with a raw byte count. Malformed options
   (a declared length running past the buffer) surface as a `[!]`
   diagnostic rather than raising (#79).
+- **IGMP and GRE checksums are verified** like the others, with a
+  `[!] mismatch` note (GRE only when its Checksum-Present bit is set).
+- **The corpus grows from 65 frames in 12 captures to 617 in 42**,
+  vendored from NETProtocols 2.9.0 (see `tests/fixtures/MANIFEST.md`),
+  including the BGP, TLS and RFC 3489 STUN session captures upstream
+  keeps outside its own corpus: their bare ACKs and split records are
+  exactly what the best-effort rule above must not call malformed.
+  Every frame is decoded, rendered and serialized, and no rendered
+  checksum may read as a mismatch.
+
+### Fixed
+- **`--json` crashed on LLDP and CDP frames** ("Object of type bytes is
+  not JSON serializable"): bytes were hex-encoded only at a layer's top
+  level, but LLDP/CDP keep theirs inside TLV tuples, and LLDP is decoded
+  by default. Encoding now goes through a `json.dumps` `default=` hook
+  that handles `bytes`, enums, `ipaddress` objects and sets at any
+  depth, and stringifies anything else rather than abort the capture.
+- **NDJSON lost the layer name of ICMPv4, ICMPv6 and IGMP** (and now
+  BGP, OSPF, PIM, VRRP): spreading a layer's fields after its `"type"`
+  discriminator let the layer's own `type` field overwrite it, so an
+  echo request read `"type": 8` instead of `"type": "ICMPv4"`.
+  `"type"` is now always the class name and the wire field is emitted
+  as `"type_"`. Underscored decode-context fields (BGP's `_followed`)
+  are no longer emitted.
+- **False checksum mismatches inside tunnels.** TCP/UDP/ICMP checksums
+  were verified against the *outermost* IP header, which is wrong for
+  every tunnelled segment (VXLAN, GRE, IP-in-IP, AH/ESP tunnel mode):
+  the corpus' inner UDP in VXLAN and TCP behind AH tunnel mode both
+  read as mismatches. They now use the nearest enclosing IP header,
+  as `Packet.with_checksums()` does.
+- **False checksum mismatches behind an IPv6 Routing header.** The
+  pseudo-header now carries the route's final destination when a
+  Routing header with segments left sits between the IP header and the
+  transport (RFC 8200 §8.1), via `verify(..., routing=)`.
+- **False checksum mismatches on padded frames.** A TCP/UDP/ICMPv6
+  checksum input included Ethernet padding and any captured FCS (a
+  54-byte bare ACK padded to 60 bytes summed 6 bytes too many); it now
+  ends at the declared datagram end. ICMPv4 now gets its IP header too,
+  so the library bounds its sum the same way.
 
 ## [6.0.0] - 2026-09-09
 
