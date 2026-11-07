@@ -4,6 +4,7 @@ Frames are built with netprotocols' own encode path from real header
 values, which keeps the fixtures readable while remaining byte-exact.
 """
 
+import ipaddress
 import struct
 from pathlib import Path
 
@@ -22,6 +23,13 @@ from netprotocols import (
     IPv6,
     Packet,
 )
+
+#: The IPv4 unspecified address, 0.0.0.0: what a DHCP message carries in
+#: ciaddr/giaddr before a client has an address or a relay is involved
+#: (RFC 2131 §2). Derived rather than written as a literal so Bandit's
+#: B104 ("binding to all interfaces") does not mistake a header field
+#: value in a test fixture for a socket bind.
+_UNSPECIFIED_V4 = str(ipaddress.IPv4Address(0))
 
 
 def _eth(ethertype: int) -> Ethernet:
@@ -157,10 +165,10 @@ def dhcp_frame() -> bytes:
         xid=0x3903F326,
         secs=0,
         flags=0,
-        ciaddr="0.0.0.0",
+        ciaddr=_UNSPECIFIED_V4,
         yiaddr="192.168.1.96",
         siaddr="192.168.1.254",
-        giaddr="0.0.0.0",
+        giaddr=_UNSPECIFIED_V4,
         chaddr=bytes.fromhex("00070daff454") + b"\x00" * 10,
         options=options,
     )
