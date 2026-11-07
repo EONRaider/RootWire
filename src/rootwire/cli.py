@@ -75,7 +75,7 @@ def build_parser() -> argparse.ArgumentParser:
             "attach a kernel-side capture filter so only matching frames "
             "reach userspace: a canned name "
             f"({', '.join(sorted(CANNED_FILTERS))}) or a filter expression "
-            "(protocols tcp/udp/icmp/arp/ip/ip6; host/port, each "
+            "(protocols tcp/udp/sctp/icmp/arp/ip/ip6; host/port, each "
             "optionally prefixed with src/dst; and/or/not; parentheses -- "
             "e.g. 'tcp and port 80'); mutually exclusive with -r"
         ),

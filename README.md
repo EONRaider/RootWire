@@ -34,12 +34,16 @@ IPv6 **including extension headers** (an MLD report renders its full
 Hop-by-Hop chain) and **Neighbor Discovery** (a Router/Neighbor
 Solicitation or Advertisement shows its target address and link-layer
 options), ICMPv4/v6, IGMP, GRE, TCP (options-aware payload offsets,
-**decoded options**), UDP, DNS (over UDP and TCP) and DHCP. Since
-NETProtocols 2.9 the decoder also walks LLDP, CDP, STP, LLC/SNAP,
-MPLS, VXLAN, IP-in-IP, IPsec ESP/AH, OSPF, PIM, VRRP, SCTP, BGP, TLS,
-STUN, NTP, RADIUS, RIP, HSRP and TFTP: those already appear in
-`--json` output with every field, and on screen by name while their
-dedicated renderers land. Every IPv4/ICMPv4/ICMPv6/IGMP/GRE/TCP/UDP
+**decoded options**), UDP, SCTP (chunk types and flags), DNS (over UDP
+and TCP), DHCP, NTP (mode, stratum, Reference ID or kiss code,
+extension fields, MAC) and TLS (one line per record; a ClientHello's
+**SNI**, cipher-suite count and extensions — and the SNI of a
+ClientHello too large for one segment, read from its first segment).
+Since NETProtocols 2.9 the decoder also walks LLDP, CDP, STP,
+LLC/SNAP, MPLS, VXLAN, IP-in-IP, IPsec ESP/AH, OSPF, PIM, VRRP, BGP,
+STUN, RADIUS, RIP, HSRP and TFTP: those already appear in `--json`
+output with every field, and on screen by name while their dedicated
+renderers land. Every IPv4/ICMPv4/ICMPv6/IGMP/GRE/TCP/UDP/SCTP
 checksum is verified against a recomputation — inside a tunnel against
 the *inner* IP header, behind an IPv6 Routing header against the
 route's final destination, and never over Ethernet padding — flagging
@@ -83,8 +87,8 @@ options:
   --filter NAME_OR_EXPR
                     attach a kernel-side capture filter so only matching
                     frames reach userspace: a canned name (arp, ip6, tcp,
-                    udp) or a filter expression -- protocols tcp/udp/icmp/
-                    arp/ip/ip6; host/port, each optionally prefixed with
+                    udp) or a filter expression -- protocols tcp/udp/sctp/
+                    icmp/arp/ip/ip6; host/port, each optionally prefixed with
                     src/dst; and/or/not; parentheses (e.g. "tcp and port
                     80"); live capture only
   --json            one NDJSON object per frame on stdout (banner and

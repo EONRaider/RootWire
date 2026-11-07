@@ -32,12 +32,14 @@ from __future__ import annotations
 from netprotocols import (
     DHCP,
     DNS,
+    TLS,
     DNSOverTCP,
     IPv4,
     IPv6,
     MaxDepthExceededError,
     Protocol,
     ProtocolError,
+    peek_server_name,
 )
 from netprotocols import decode_frame as _decode_chain
 from netprotocols.registry import DEFAULT
@@ -115,6 +117,40 @@ def _classify_stop(
     return str(error), None
 
 
+def _peek_sni(stop: ProtocolError | None, payload: bytes) -> str | None:
+    """The SNI host name of a ClientHello the TLS decoder could not take
+    whole, or ``None``.
+
+    A ClientHello larger than one segment (Chromium's, with its
+    1,216-byte X25519MLKEM768 key share, is the common case) makes
+    :meth:`netprotocols.TLS.decode` reject the first segment as a record
+    cut short, which RootWire records as a best-effort miss. The host
+    name the client asked for usually sits in that first segment anyway,
+    and it is what an analyst triages TLS on, so
+    :func:`netprotocols.peek_server_name` reads it from the undecoded
+    bytes: a bounded, stateless read of the first record only.
+
+    Only a TLS miss is peeked, and not a depth overflow (the bytes left
+    then are further whole records of an established session, never a
+    ClientHello). Only a *found* name is returned: *absent* and *not
+    reached* both mean there is nothing to show, and a malformed
+    ``server_name`` extension, which the peek raises on, is treated the
+    same way, since the frame is already a miss, not an error.
+    """
+    if (
+        stop is None
+        or isinstance(stop, MaxDepthExceededError)
+        or stop.protocol is not TLS
+        or not payload
+    ):
+        return None
+    try:
+        peek = peek_server_name(payload)
+    except ProtocolError:
+        return None
+    return peek.server_name if peek.complete else None
+
+
 def _declared_length(layers: tuple[Protocol, ...]) -> int | None:
     """Total frame length implied by the outermost IP header, if one was
     decoded: that header's offset in the frame plus the datagram length
@@ -188,12 +224,17 @@ def decode_frame(
     Bytes past the end the frame's own length fields declare (Ethernet
     padding, a captured FCS) are kept apart as ``DecodedFrame.trailer``
     rather than folded into the payload: they belong to no layer.
+
+    When the miss is a ClientHello too large for one segment, its SNI
+    host name is still read from the bytes that are there, into
+    ``DecodedFrame.sni_peek`` (see :func:`_peek_sni`).
     """
     packet = _decode_chain(data, lax=True, max_depth=_MAX_LAYERS)
     decoded_layers = packet.layers
     error, l7_miss = _classify_stop(packet.stopped_by, decoded_layers)
     trailer = packet.trailer
     payload_end = len(data) - len(trailer)
+    payload = data[packet.consumed : payload_end]
 
     declared = _declared_length(decoded_layers)
     return DecodedFrame(
@@ -202,11 +243,12 @@ def decode_frame(
         interface=interface,
         length=len(data),
         layers=decoded_layers,
-        payload=data[packet.consumed : payload_end],
+        payload=payload,
         truncated=declared is not None and declared > len(data),
         malformed_length=_ip_length_malformed(decoded_layers),
         error=error,
+        raw=data,
         l7_miss=l7_miss,
         trailer=trailer,
-        raw=data,
+        sni_peek=_peek_sni(packet.stopped_by, payload) if l7_miss else None,
     )
