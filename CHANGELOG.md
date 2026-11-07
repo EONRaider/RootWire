@@ -145,9 +145,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Reference ID or a stratum-0 kiss code, the transmit time, NTPv4
   extension fields and the MAC. Attacker-chosen text (the SNI, which the
   library only checks is ASCII — ESC is ASCII — and the Reference ID or
-  kiss code) is sanitized for the terminal; on-demand sections (the
-  ClientHello, SCTP chunks, the NTP body) render a `[!]` line instead of
-  raising when malformed; and list lines cap at 16 items with "(+N
+  kiss code) is sanitized for the terminal; on-demand sections (SCTP
+  chunks, the NTP body) render a `[!]` line instead of raising when
+  malformed, and a Handshake record that does not parse as the
+  ClientHello its first byte announces renders an informational `[~]`
+  line, since an encrypted TLS 1.2 Finished begins that way one time in
+  256; and list lines cap at 16 items with "(+N
   more)", since one packet can carry hundreds of 4-byte SCTP chunks.
 - **Screen renderers for VRRP, HSRP, RIP, OSPF, PIM and BGP**, the
   routing and first-hop-redundancy protocols an analyst triages a
