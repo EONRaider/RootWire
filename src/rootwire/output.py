@@ -33,6 +33,7 @@ from netprotocols import (
     ESP,
     GRE,
     HSRP,
+    HTTP,
     IGMP,
     LLC,
     LLDP,
@@ -60,6 +61,8 @@ from netprotocols import (
     DNSOverTCP,
     Ethernet,
     EtherType,
+    HTTPAnomaly,
+    HTTPAnomalyKind,
     ICMPv4,
     ICMPv6,
     IPv4,
@@ -90,6 +93,7 @@ from netprotocols import (
     verify,
     verify_lsa,
 )
+from netprotocols.flow import FlowKey, flow_key
 
 from rootwire.frame import DecodedFrame
 from rootwire.pcap import PcapWriter
@@ -1628,6 +1632,45 @@ class OutputToScreen(Output):
                 self._print(f"{_II}Attributes: {_capped(others)}")
 
     @_render.register
+    def _(self, layer: HTTP, frame: DecodedFrame) -> None:
+        """HTTP/1.x, reached only through ``--decode-as`` (NETProtocols
+        registers it on no port): the start line; the Host, User-Agent,
+        Referer, Content-Type, Server and Location fields, then every
+        field by name; the body's framing and size, never its bytes;
+        and the anomalies the grammar resolved, those that let two
+        parsers disagree on where a message ends (request smuggling)
+        flagged ``[!]``. Every byte of the head is the sender's, read
+        as latin-1, so each value is sanitized -- a lone 0x9B is a C1
+        CSI -- kept on one line and cut. When bytes follow the message
+        in the frame (a pipelined request, the start of the next
+        response) a ``[~]`` line counts them: the walk does not chain
+        HTTP messages. No accessor here raises."""
+        self._print(f"{_I}[+] HTTP {_http_start_line(layer)}")
+        for name in _HTTP_SHOWN_FIELDS:
+            # Every occurrence up to the list limit, then a count: one
+            # head can repeat a field thousands of times.
+            values = layer.header_values(name)
+            for value in values[:_LIST_LIMIT]:
+                self._print(f"{_II}{name}: {_cut(_inline_text(value))}")
+            if (extra := len(values) - _LIST_LIMIT) > 0:
+                self._print(f"{_II}(+{extra} more {name})")
+        names = [_cut(_inline_text(field.name)) for field in layer.fields]
+        if names:
+            self._print(f"{_II}Fields: {_capped(names)}")
+        self._print(f"{_II}Body: {_http_body_text(layer)}")
+        smuggling, other = _http_anomalies(layer.anomalies)
+        if smuggling:
+            self._print(f"{_II}[!] Framing anomalies: {_capped(smuggling)}")
+        if other:
+            self._print(f"{_II}[~] Anomalies: {_capped(other)}")
+        if layer is frame.layers[-1] and frame.payload:
+            self._print(
+                f"{_II}[~] {len(frame.payload)} more bytes follow this "
+                f"message (a pipelined message or a later one's start; "
+                f"not decoded)"
+            )
+
+    @_render.register
     def _(self, layer: STUN, frame: DecodedFrame) -> None:
         """STUN: the method and class, the Transaction ID and the
         FINGERPRINT, verified (a misplaced one flagged); the mapped
@@ -1896,6 +1939,98 @@ def _tftp_summary(layer: TFTP) -> str:
     return ""
 
 
+#: The HTTP fields shown on lines of their own, every occurrence: what
+#: an analyst triages a request or response on. Credentials
+#: (Authorization, Cookie) are named on the "Fields" line only; ``-d``
+#: shows the raw head.
+_HTTP_SHOWN_FIELDS = (
+    "Host",
+    "User-Agent",
+    "Referer",
+    "Content-Type",
+    "Server",
+    "Location",
+)
+
+#: The HTTP anomalies that make a message's end ambiguous -- the ones a
+#: request-smuggling or response-splitting attack rests on (RFC 9112
+#: §6.3, §11.2): conflicting or malformed Content-Length and
+#: Transfer-Encoding, framing fields where they do not belong, and a
+#: Host two parsers could read differently.
+_HTTP_FRAMING_ANOMALIES = frozenset(
+    {
+        HTTPAnomalyKind.CL_AND_TE,
+        HTTPAnomalyKind.CONTENT_LENGTH_REPEATED,
+        HTTPAnomalyKind.INVALID_CONTENT_LENGTH,
+        HTTPAnomalyKind.CONTENT_LENGTH_UNRECOVERABLE,
+        HTTPAnomalyKind.TE_PARAMETERS,
+        HTTPAnomalyKind.TE_INVALID_OCTET,
+        HTTPAnomalyKind.TE_CHUNKED_REPEATED,
+        HTTPAnomalyKind.TE_IN_HTTP10,
+        HTTPAnomalyKind.REQUEST_FRAMING_UNDETERMINABLE,
+        HTTPAnomalyKind.RESPONSE_TE_NOT_CHUNKED,
+        HTTPAnomalyKind.FRAMING_FIELD_MISPLACED,
+        HTTPAnomalyKind.CONNECTION_LISTS_FRAMING_FIELD,
+        HTTPAnomalyKind.WHITESPACE_BEFORE_COLON,
+        HTTPAnomalyKind.CHUNK_EXTENSION_INVALID,
+        HTTPAnomalyKind.HOST_AMBIGUOUS,
+        HTTPAnomalyKind.HOST_DUPLICATE,
+    }
+)
+
+
+def _http_start_line(layer: HTTP) -> str:
+    """An HTTP message's start line for its header line:
+    ``"GET /hello (HTTP/1.1)"`` or ``"200 OK (HTTP/1.1)"``, each part
+    sanitized, on one line and cut."""
+    if layer.is_response:
+        parts = [str(layer.status_code), layer.reason_phrase or ""]
+    else:
+        parts = [layer.method or "", layer.target or ""]
+    shown = " ".join(_cut(_inline_text(part)) for part in parts if part)
+    return f"{shown} ({_cut(_inline_text(layer.http_version))})"
+
+
+def _http_body_text(layer: HTTP) -> str:
+    """An HTTP body's framing and size: ``"42 bytes (content_length)"``,
+    ``"none"``, a chunked body's size without its framing and its
+    trailer count."""
+    framing = layer.framing.value
+    if framing == "none":
+        return "none"
+    text = f"{len(layer.content)} bytes ({framing})"
+    if trailers := layer.trailers:
+        text += (
+            f", {len(trailers)} trailer field{'s' if len(trailers) > 1 else ''}"
+        )
+    return text
+
+
+def _http_anomaly_text(anomaly: HTTPAnomaly) -> str:
+    """One HTTP anomaly: its kind, the field it is in (sanitized: the
+    sender named it) and how often it occurred, e.g.
+    ``"cl_and_te (content-length)"`` or ``"obs_fold (x-a) x3"``."""
+    text = anomaly.kind.value
+    if anomaly.field is not None:
+        text += f" ({_cut(_inline_text(anomaly.field))})"
+    if anomaly.occurrences > 1:
+        text += f" x{anomaly.occurrences}"
+    return text
+
+
+def _http_anomalies(
+    anomalies: tuple[HTTPAnomaly, ...],
+) -> tuple[list[str], list[str]]:
+    """*anomalies* as text, split into the framing anomalies (see
+    :data:`_HTTP_FRAMING_ANOMALIES`) and the rest."""
+    framing: list[str] = []
+    other: list[str] = []
+    for anomaly in anomalies:
+        bucket = framing if anomaly.kind in _HTTP_FRAMING_ANOMALIES else other
+        bucket.append(_http_anomaly_text(anomaly))
+    return framing, other
+
+
 #: RADIUS attribute types whose Value is text (RFC 2865 §5, RFC 2866
 #: §5.5): User-Name, Reply-Message, Called-Station-Id,
 #: Calling-Station-Id, NAS-Identifier and Acct-Session-Id.
@@ -2132,6 +2267,87 @@ class OutputToNDJSON(Output):
 #: Innermost-layer classes counted by name in the statistics report.
 _STATS_BUCKETS = (TCP, UDP, SCTP, ICMPv4, ICMPv6, ARP)
 
+#: Most conversations the summary tracks. Every new 5-tuple costs an
+#: entry, and a scan or a spoofed flood mints one per frame: past this
+#: many, frames of conversations not yet seen are counted, not tracked.
+_FLOW_LIMIT = 65_536
+
+#: Conversations the summary lists, largest by bytes first.
+_FLOW_SHOWN = 10
+
+#: Transport names for a :class:`~netprotocols.flow.FlowKey`'s protocol.
+_FLOW_PROTOCOLS = {6: "TCP", 17: "UDP", 132: "SCTP"}
+
+
+def _frame_flow_key(frame: DecodedFrame) -> FlowKey | None:
+    """The conversation *frame* belongs to, or ``None`` when it has none.
+
+    The conversation is the innermost IP datagram's: the last IPv4/IPv6
+    header and the TCP, UDP or SCTP header after it, keyed by
+    :func:`netprotocols.flow.flow_key`, the same for both directions,
+    with the Routing header in between applied (see
+    :func:`_enclosing_ip`). A tunnelled frame therefore counts towards
+    the conversation inside the tunnel -- IP-in-IP, GRE, AH or ESP
+    tunnel mode, VXLAN -- and a frame whose innermost datagram carries
+    no transport (an ICMP echo, inside a VXLAN tunnel or not) has none,
+    rather than being counted under the tunnel's underlay flow -- nor
+    does a transport that carries a whole Ethernet frame, as VXLAN's UDP
+    does around an inner ARP, which has no IP header to key.
+    :meth:`netprotocols.Packet.flow_key` keys the *first* transport
+    instead, which for VXLAN is the underlay; RootWire reports what the
+    analyst sees inside.
+    """
+    inner = next(
+        (
+            index
+            for index in range(len(frame.layers) - 1, -1, -1)
+            if isinstance(frame.layers[index], (IPv4, IPv6))
+        ),
+        None,
+    )
+    if inner is None:
+        return None
+    tail = frame.layers[inner + 1 :]
+    transport = next(
+        (layer for layer in tail if isinstance(layer, (TCP, UDP, SCTP))),
+        None,
+    )
+    if transport is None or any(
+        isinstance(layer, (VXLAN, Ethernet)) for layer in tail
+    ):
+        # No transport, or one carrying a whole layer-2 frame (VXLAN's
+        # UDP around an inner ARP, which has no IP header of its own, or
+        # around an inner frame too short to decode): a tunnel's
+        # underlay, not a conversation.
+        return None
+    ip, routing = _enclosing_ip(frame, transport)
+    try:
+        return flow_key(transport, ip=ip, routing=routing)
+    except ProtocolError:
+        # Only an absent ``ip`` raises, and _enclosing_ip always finds
+        # the one at ``inner``; a statistics line must never stop a
+        # capture all the same.
+        return None
+
+
+def _endpoint_text(address: str, port: int | None) -> str:
+    """``"10.0.0.1:80"``, ``"[2001:db8::1]:80"``, or the bare address
+    when there is no port."""
+    if port is None:
+        return address
+    return f"[{address}]:{port}" if ":" in address else f"{address}:{port}"
+
+
+def _flow_text(key: FlowKey, frames: int, octets: int) -> str:
+    """One conversation line: transport, both endpoints, and its frame
+    and byte counts."""
+    name = _FLOW_PROTOCOLS.get(key.protocol, f"proto {key.protocol}")
+    return (
+        f"{name} {_endpoint_text(key.addr_a, key.port_a)} <-> "
+        f"{_endpoint_text(key.addr_b, key.port_b)}: {frames:,} frame"
+        f"{'' if frames == 1 else 's'}, {octets:,} bytes"
+    )
+
 
 class StatsCollector(Output):
     """Accumulate capture statistics; render them with :meth:`report`.
@@ -2140,6 +2356,12 @@ class StatsCollector(Output):
     layer among TCP/UDP/SCTP/ICMPv4/ICMPv6/ARP — unambiguous even when a
     chain ends at an extension header or a non-first fragment, which
     count as ``other``.
+
+    The conversation tally counts frames and bytes per TCP/UDP/SCTP
+    conversation, both directions together (see
+    :func:`_frame_flow_key`), and the report lists the largest by bytes.
+    At most :data:`_FLOW_LIMIT` conversations are tracked; frames of a
+    conversation first seen past that are counted as untracked.
     """
 
     def __init__(self) -> None:
@@ -2149,8 +2371,14 @@ class StatsCollector(Output):
         self._malformed = 0
         self._truncated = 0
         self._buckets: Counter[str] = Counter()
+        self._flow_frames: Counter[FlowKey] = Counter()
+        self._flow_bytes: Counter[FlowKey] = Counter()
+        self._untracked = 0
 
     def update(self, frame: DecodedFrame) -> None:
+        """Count *frame*: its size, its malformed and truncated flags,
+        its protocol bucket and its conversation."""
+        self._update_flow(frame)
         self._frames += 1
         self._bytes += frame.length
         if frame.error is not None or frame.malformed_length:
@@ -2163,6 +2391,43 @@ class StatsCollector(Output):
                 break
         else:
             self._buckets["other"] += 1
+
+    def _update_flow(self, frame: DecodedFrame) -> None:
+        """Count *frame* towards its conversation, if it has one and the
+        conversation is tracked (see :data:`_FLOW_LIMIT`)."""
+        key = _frame_flow_key(frame)
+        if key is None:
+            return
+        if key not in self._flow_frames and len(self._flow_frames) >= (
+            _FLOW_LIMIT
+        ):
+            self._untracked += 1
+            return
+        self._flow_frames[key] += 1
+        self._flow_bytes[key] += frame.length
+
+    def _report_flows(self, stream: IO[str]) -> None:
+        """The conversation lines of the summary: how many, the largest
+        :data:`_FLOW_SHOWN` by bytes, and the untracked frames."""
+        if not self._flow_frames and not self._untracked:
+            return
+        count = len(self._flow_frames)
+        if count > _FLOW_SHOWN:
+            heading = (
+                f"{count:,} conversations, the {_FLOW_SHOWN} largest by bytes"
+            )
+        else:
+            heading = f"{count} conversation{'' if count == 1 else 's'}"
+        print(f"[=] {heading}:", file=stream)
+        for key, octets in self._flow_bytes.most_common(_FLOW_SHOWN):
+            text = _flow_text(key, self._flow_frames[key], octets)
+            print(f"[=]   {text}", file=stream)
+        if self._untracked:
+            print(
+                f"[=]   (+{self._untracked:,} frames of conversations past "
+                f"the {_FLOW_LIMIT:,} tracked)",
+                file=stream,
+            )
 
     def report(self, stream: IO[str] | None = None) -> None:
         """Write the capture summary (to stderr by default)."""
@@ -2188,3 +2453,4 @@ class StatsCollector(Output):
                 f"truncated: {self._truncated}",
                 file=stream,
             )
+        self._report_flows(stream)

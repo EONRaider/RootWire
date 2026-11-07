@@ -16,10 +16,13 @@ import signal
 import sys
 from collections.abc import AsyncIterator, Iterator, Sequence
 
+from netprotocols import ProtocolError
+
 from rootwire import __version__
 from rootwire.bpf import CANNED_FILTERS, FilterProgram
 from rootwire.bpf_compiler import BPFCompileError, compile_expression
-from rootwire.decoder import decode_frame
+from rootwire.decode_as import DecodeAsError, parse_decode_as
+from rootwire.decoder import DecodeOptions, decode_frame, decode_options
 from rootwire.output import (
     Output,
     OutputToNDJSON,
@@ -32,6 +35,7 @@ __all__ = ["build_parser", "main"]
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """The ``rootwire`` argument parser: every flag, with its help."""
     parser = argparse.ArgumentParser(
         prog="rootwire",
         description=(
@@ -78,6 +82,20 @@ def build_parser() -> argparse.ArgumentParser:
             "(protocols tcp/udp/sctp/icmp/arp/ip/ip6; host/port, each "
             "optionally prefixed with src/dst; and/or/not; parentheses -- "
             "e.g. 'tcp and port 80'); mutually exclusive with -r"
+        ),
+    )
+    parser.add_argument(
+        "--decode-as",
+        metavar="TABLE=KEY:CLASS",
+        action="append",
+        default=None,
+        help=(
+            "decode what a dispatch table maps KEY to as CLASS, or as "
+            "nothing with CLASS 'none'; repeatable -- e.g. "
+            "'udp.port=40000:TFTP' to follow a TFTP transfer past its "
+            "request, 'tcp.port=8080:HTTP' (HTTP is never decoded "
+            "otherwise), 'udp.port=1812:none'; tables: ethertype, "
+            "llc.dsap, llc.snap, ip.proto, ip.proto.v6, udp.port, tcp.port"
         ),
     )
     parser.add_argument(
@@ -140,16 +158,25 @@ async def _replay_source(
 async def run(
     source: AsyncIterator[tuple[bytes, int, str | None]],
     outputs: Sequence[Output],
+    options: DecodeOptions | None = None,
 ) -> int:
     """Decode and dispatch every frame the source yields.
 
+    :param options: How to decode (see
+        :func:`rootwire.decoder.decode_options`); the default registry
+        when ``None``.
     :returns: The number of frames processed.
     """
+    options = options if options is not None else decode_options()
     number = 0
     async for data, timestamp, interface in source:
         number += 1
         frame = decode_frame(
-            data, number=number, timestamp=timestamp, interface=interface
+            data,
+            number=number,
+            timestamp=timestamp,
+            interface=interface,
+            options=options,
         )
         for output in outputs:
             output.update(frame)
@@ -159,6 +186,7 @@ async def run(
 async def _drive(
     source: AsyncIterator[tuple[bytes, int, str | None]],
     outputs: Sequence[Output],
+    options: DecodeOptions | None = None,
 ) -> int:
     """Run :func:`run` to completion, converting ``SIGTERM`` into the
     same orderly cancellation Ctrl-C already gets for free.
@@ -174,7 +202,7 @@ async def _drive(
     instead — which is exactly how ``main()`` tells the two apart.
     """
     loop = asyncio.get_running_loop()
-    task = asyncio.ensure_future(run(source, outputs))
+    task = asyncio.ensure_future(run(source, outputs, options))
     loop.add_signal_handler(signal.SIGTERM, task.cancel)
     try:
         return await task
@@ -236,6 +264,20 @@ def _resolve_filter_program(
     return FilterProgram(instructions)
 
 
+def _resolve_decode_options(
+    args: argparse.Namespace, parser: argparse.ArgumentParser
+) -> DecodeOptions:
+    """``--decode-as``'s overrides applied to the default registry, built
+    once for the whole capture. A bad value is an argument error, reported
+    as argparse reports one (usage message, exit 2): one the parser
+    rejects (see :mod:`rootwire.decode_as`), and anything the registry
+    itself refuses when deriving from it."""
+    try:
+        return decode_options(parse_decode_as(args.decode_as or ()))
+    except (DecodeAsError, ProtocolError, TypeError) as error:
+        parser.error(str(error))
+
+
 def _build_outputs(
     args: argparse.Namespace, stats: StatsCollector
 ) -> list[Output] | None:
@@ -265,10 +307,18 @@ def _build_outputs(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Run RootWire with *argv* (``sys.argv[1:]`` by default): validate
+    the arguments, build the decode options and the outputs, capture or
+    replay until done, and report the statistics.
+
+    :returns: The process exit status: 0, or 1 when the capture could
+        not start. A bad argument exits 2 through ``parser.error``.
+    """
     parser = build_parser()
     args = parser.parse_args(argv)
     _validate_args(args, parser)
     filter_program = _resolve_filter_program(args, parser)
+    options = _resolve_decode_options(args, parser)
 
     stats = StatsCollector()
     outputs = _build_outputs(args, stats)
@@ -303,7 +353,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     # library never hijacks the caller's signal handling.
     previous_sigterm_handler = signal.getsignal(signal.SIGTERM)
     try:
-        asyncio.run(_drive(source, outputs))
+        asyncio.run(_drive(source, outputs, options))
         report_stats = True
     except PermissionError:
         print(
