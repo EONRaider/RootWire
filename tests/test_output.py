@@ -176,6 +176,40 @@ class TestDNSRendering:
         assert "\x1b" not in text
         assert "\\x1b[31mowned\\x1b[0m" in text
 
+    def test_dns_names_and_rdata_stay_on_one_line(self):
+        """A label is any bytes, a newline included: a name or RDATA
+        that carries one must not start a line of its own, where a
+        sender could forge RootWire's own ``[!]`` diagnostic."""
+        forged = b"x\n[!] Malformed"
+        qname = bytes([len(forged)]) + forged + b"\x00"
+        txt = bytes([len(forged)]) + forged
+        sections = (
+            qname
+            + b"\x00\x10\x00\x01"  # QTYPE=TXT, QCLASS=IN
+            + b"\xc0\x0c"  # the answer's name points at the question's
+            + b"\x00\x10\x00\x01\x00\x00\x00\x3c"  # TXT, IN, TTL 60
+            + len(txt).to_bytes(2, "big")
+            + txt
+        )
+        dns = DNS(
+            transaction_id=1,
+            flags=0x8180,
+            qdcount=1,
+            ancount=1,
+            nscount=0,
+            arcount=0,
+            sections=sections,
+        )
+        udp = UDP(
+            src_port=53, dst_port=1234, length=8 + dns.header_len, checksum=0
+        )
+        ip = _ipv4(protocol=17, total_length=20 + 8 + dns.header_len)
+        text = render(bytes(Packet(_eth(0x0800), ip, udp, dns)))
+        assert "Q: " in text
+        assert "A: " in text
+        assert "\n[!] Malformed" not in text
+        assert text.count("x\\n[!] Malformed") >= 3  # Q name, A name, RDATA
+
 
 class TestExtensionHeaderRendering:
     def test_mld_frame_renders_hop_by_hop(self, request):

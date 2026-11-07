@@ -716,10 +716,10 @@ class OutputToScreen(Output):
             return
         with self._guard("Options"):
             options = layer.parsed_options
-            self._print(
-                f"{_II}Options: "
-                + ", ".join(_format_option(option) for option in options)
-            )
+            # Capped like every one-line list: 40 bytes of options can
+            # be 40 one-byte No-Operations.
+            formatted = [_format_option(option) for option in options]
+            self._print(f"{_II}Options: {_capped(formatted)}")
 
     @_render.register
     def _(self, layer: IPv6Routing, frame: DecodedFrame) -> None:
@@ -893,11 +893,11 @@ class OutputToScreen(Output):
             questions = layer.questions
             answers = layer.answers
             for question in questions:
-                name = _sanitize_for_terminal(question.name)
+                name = _inline_text(question.name)
                 self._print(f"{_II}Q: {name} (type {question.qtype})")
             for answer in answers:
-                name = _sanitize_for_terminal(answer.name)
-                rdata = _sanitize_for_terminal(answer.rdata_text)
+                name = _inline_text(answer.name)
+                rdata = _inline_text(answer.rdata_text)
                 self._print(
                     f"{_II}A: {name} {answer.rtype_name} {answer.ttl}s "
                     f"-> {rdata}"
@@ -2288,8 +2288,10 @@ def _frame_flow_key(frame: DecodedFrame) -> FlowKey | None:
     with the Routing header in between applied (see
     :func:`_enclosing_ip`). A tunnelled frame therefore counts towards
     the conversation inside the tunnel -- IP-in-IP, GRE, AH tunnel mode,
-    VXLAN; ESP encrypts its inner datagram, so the walk ends there and
-    an ESP frame has no conversation -- and a frame whose innermost
+    VXLAN; ESP encrypts its inner datagram, so the walk ends there: ESP
+    straight over IP has no conversation, and UDP-encapsulated ESP
+    (NAT-T, decoded with ``--decode-as udp.port=4500:ESP``) counts under
+    its UDP flow -- and a frame whose innermost
     datagram carries no transport (an ICMP echo, inside a VXLAN tunnel
     or not) has none,
     rather than being counted under the tunnel's underlay flow -- nor

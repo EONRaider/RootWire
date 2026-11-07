@@ -264,8 +264,9 @@ A conversation is a TCP, UDP or SCTP flow, both directions together.
 It is the *innermost* IP datagram's, so tunnelled traffic (IP-in-IP,
 GRE, AH tunnel mode, VXLAN) counts under the conversation inside the
 tunnel, and a VXLAN underlay never counts as one. ESP encrypts what it
-carries, so the decode stops at ESP: no inner conversation is visible,
-and an ESP frame counts under none. At most 65,536
+carries, so the decode stops at ESP and no inner conversation is
+visible: ESP straight over IP counts under none, and UDP-encapsulated
+ESP (NAT-T, with `--decode-as udp.port=4500:ESP`) under its UDP flow. At most 65,536
 conversations are tracked — a spoofed flood mints one per frame — and
 frames of any past that are counted as untracked.
 
