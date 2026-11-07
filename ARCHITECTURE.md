@@ -65,6 +65,17 @@ flowchart LR
   from silently decoding into nonsense.
 - **[`decoder.py`](src/rootwire/decoder.py)** turns one frame's bytes
   into a `DecodedFrame` — a pure function with no state between calls.
+  How it walks is a `DecodeOptions` value built once per capture by
+  `decode_options()`: the dispatch registry the walk resolves against
+  (the library's default, or a child derived with `--decode-as`'s
+  overrides via `Registry.derive`, so no per-frame copy) and the set of
+  classes the best-effort rule covers (below).
+- **[`decode_as.py`](src/rootwire/decode_as.py)** parses
+  `--decode-as TABLE=KEY:CLASS` into NETProtocols' `decode_as` form —
+  table, wire value, then a decoder class or `WITHHELD` for `none`. It
+  checks what the library leaves to the caller (a port or IP-protocol
+  key in range, a table and key given once) and reports every refusal,
+  the registry's own included, as an argument error.
 - **[`frame.py`](src/rootwire/frame.py)** defines `DecodedFrame`:
   frozen, slotted, self-contained — including `raw`, the exact
   captured bytes (the same object the decoder received, so keeping it
@@ -146,9 +157,14 @@ as exceptions to die on:
   bare ACK, a segment continuing a record begun in an earlier one, or
   another service on the port then fails to decode — which says
   nothing about the frame's health. `decoder.py` derives that set of
-  port-dispatched classes from the library's default registry at
-  import (minus DNS, DNS-over-TCP and DHCP, whose malformations
-  predate the upgrade and stay real signal) and records a stop inside
+  port-dispatched classes from the registry the capture walks with —
+  the default one, or the one `--decode-as` derived, so `HTTP` mapped
+  to port 80 meets every bare ACK and every response-body segment as
+  TLS on 443 does (minus DNS, DNS-over-TCP and DHCP, whose malformations
+  predate the upgrade and stay real signal, and minus any class a type
+  field also reaches — EtherType, LLC, IP protocol — since the rule
+  matches on the class and `udp.port=4000:IPv4` must not turn every
+  malformed IPv4 header into a miss) and records a stop inside
   one as `frame.l7_miss`, not `frame.error`: no `[!]`, not counted as
   malformed, the undecoded bytes left as payload, and a `[~]` note on
   screen only when there are bytes to explain. (`[~]` marks a line the
@@ -246,9 +262,17 @@ plus an optional `close()` for resources at end of capture:
 - **`StatsCollector`** tallies frames, bytes, malformed and truncated
   counts, and per-protocol totals bucketed by the innermost decoded
   layer among TCP/UDP/SCTP/ICMPv4/ICMPv6/ARP (an extension-header or
-  non-first-fragment ending counts as `other`). The report — with
-  duration and frames/s — lands on stderr at Ctrl-C or replay
-  end-of-file.
+  non-first-fragment ending counts as `other`), and a per-conversation
+  tally: frames and bytes per TCP/UDP/SCTP flow, both directions under
+  one `netprotocols.flow.flow_key`. The flow is the *innermost* IP
+  datagram's, so a tunnel counts under the conversation inside it, and
+  a transport that carries a whole Ethernet frame (VXLAN's UDP) is an
+  underlay, never a conversation — unlike `Packet.flow_key`, which
+  keys the first transport. At most 65,536 conversations are tracked
+  (a spoofed flood mints one per frame); frames of later ones are
+  counted as untracked. The report — with duration and frames/s and the
+  ten largest conversations by bytes — lands on stderr at Ctrl-C or
+  replay end-of-file.
 
 They compose freely: `sudo rootwire -i eth0 -w evidence.pcap --json`
 renders NDJSON to stdout while archiving every frame to disk.

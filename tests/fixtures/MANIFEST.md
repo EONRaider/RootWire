@@ -26,10 +26,14 @@ RootWire's own differences from the upstream layout:
   error.
 - **Left out**: `mpls/mpls_snaplen.pcap`, whose frames are cut at a
   20-byte snap length and genuinely end in errors (the corpus requires
-  none), and `http/` (raw request/response streams plus `http.pcap`),
-  which belongs with the HTTP renderer: HTTP is not in NETProtocols'
-  default registry, so RootWire only decodes it once `--decode-as`
-  exists.
+  none), and the raw request/response streams beside upstream's
+  `http.pcap`, which RootWire has no use for.
+- **`http/http.pcap` is vendored where upstream keeps it**, outside the
+  corpus glob, which is non-recursive: HTTP is not in NETProtocols'
+  default registry, so these 98 frames end at TCP unless
+  `--decode-as tcp.port=80:HTTP` names it. `tests/test_decode_as.py`,
+  `tests/test_renderers_http.py` and `tests/test_flows.py` read it
+  that way; the corpus counts below do not include it.
 
 In all: **617 frames across 42 captures**, every one decoded, rendered
 and serialized to NDJSON by the test suite, with no checksum mismatch

@@ -29,6 +29,9 @@ real signal in RootWire's output.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass
+
 from netprotocols import (
     DHCP,
     DNS,
@@ -42,11 +45,15 @@ from netprotocols import (
     peek_server_name,
 )
 from netprotocols import decode_frame as _decode_chain
-from netprotocols.registry import DEFAULT
+from netprotocols.registry import DEFAULT, Registry, WithheldType
 
 from rootwire.frame import DecodedFrame
 
-__all__ = ["decode_frame"]
+__all__ = ["DecodeOptions", "decode_frame", "decode_options"]
+
+#: A ``--decode-as`` override set: table name, then wire value, then the
+#: class to decode it as or :data:`~netprotocols.registry.WITHHELD`.
+DecodeAs = Mapping[str, Mapping[int, type[Protocol] | WithheldType]]
 
 #: Upper bound on decoded layers per frame. Real stacks stay in single
 #: digits; a crafted 65,535-byte frame of back-to-back 8-byte
@@ -61,31 +68,95 @@ __all__ = ["decode_frame"]
 _MAX_LAYERS = 32
 
 
-def _port_dispatched_l7() -> frozenset[type[Protocol]]:
-    """The application classes NETProtocols dispatches on port alone,
+#: The registry tables whose entries are a header's own type field
+#: (EtherType, LLC DSAP/SNAP, IP protocol): a class reached through one
+#: of them is a header the frame declares, never a port's guess.
+_TYPED_TABLES = ("ethertype", "llc.dsap", "llc.snap", "ip.proto", "ip.proto.v6")
+
+
+def _classes(
+    registry: Registry, tables: tuple[str, ...]
+) -> set[type[Protocol]]:
+    """Every class *registry* maps a key to in *tables*; a key the
+    registry *withholds* (:data:`~netprotocols.registry.WITHHELD`) is
+    not a class and is skipped."""
+    return {
+        cls
+        for table in tables
+        for cls in registry.table(table).values()
+        if isinstance(cls, type)
+    }
+
+
+def _port_dispatched_l7(
+    registry: Registry = DEFAULT,
+) -> frozenset[type[Protocol]]:
+    """The application classes *registry* dispatches on port alone,
     minus the three that predate NETProtocols 2.3 (see the module
     docstring).
 
-    Derived from the default registry rather than hardcoded, so a
-    future release that registers another port-heuristic decoder is
-    covered without a RootWire change. A key the registry *withholds*
-    (``netprotocols.registry.WITHHELD``) is not a class and is skipped.
-    """
-    dispatched = (
-        *DEFAULT.table("tcp.port").values(),
-        *DEFAULT.table("udp.port").values(),
-    )
-    classes = {cls for cls in dispatched if isinstance(cls, type)}
-    return frozenset(classes - {DNS, DNSOverTCP, DHCP})
+    Derived from the registry rather than hardcoded, so a future release
+    that registers another port-heuristic decoder is covered without a
+    RootWire change, and so is a class a ``--decode-as`` override maps
+    to a port: an HTTP decoder told to read port 80 meets every bare ACK
+    and every response body segment on it, the same as TLS on 443.
 
+    A class that a typed table (:data:`_TYPED_TABLES`) also reaches is
+    left out: the best-effort rule matches on the class, so mapping a
+    port to ``IPv4`` must not turn every malformed IPv4 header -- a
+    tunnel's inner one included -- into a miss.
+    """
+    ported = _classes(registry, ("tcp.port", "udp.port"))
+    typed = _classes(registry, _TYPED_TABLES)
+    return frozenset(ported - typed - {DNS, DNSOverTCP, DHCP})
+
+
+@dataclass(frozen=True, slots=True)
+class DecodeOptions:
+    """How :func:`decode_frame` walks: the dispatch tables, and the
+    port-dispatched classes whose failures are best-effort misses.
+
+    Build one with :func:`decode_options`, once per capture: deriving a
+    registry copies its tables, which is too much work to repeat per
+    frame.
+
+    :param registry: The dispatch tables the walk resolves against.
+    :param best_effort: The classes whose decode failures are misses,
+        not errors (see the module docstring).
+    """
+
+    registry: Registry
+    best_effort: frozenset[type[Protocol]]
+
+
+def decode_options(decode_as: DecodeAs | None = None) -> DecodeOptions:
+    """The :class:`DecodeOptions` for a capture, with *decode_as*'s
+    overrides applied on top of the default registry.
+
+    :param decode_as: Overrides keyed by table, then by wire value, as
+        :meth:`netprotocols.registry.Registry.derive` takes them.
+    :raises netprotocols.registry.UnknownTableError: if *decode_as*
+        names a table the registry does not have.
+    :raises netprotocols.registry.InvalidRegistryKeyError: if a key does
+        not fit its table (an ``llc.dsap`` above 0xFF, ...).
+    :raises TypeError: if a key maps to ``None``.
+    """
+    registry = DEFAULT.derive(decode_as) if decode_as else DEFAULT
+    return DecodeOptions(registry, _port_dispatched_l7(registry))
+
+
+#: The default registry's options: no overrides.
+_DEFAULT_OPTIONS = decode_options()
 
 #: Port-dispatched application classes whose decode failures are
-#: best-effort misses rather than malformed frames.
-_BEST_EFFORT_L7 = _port_dispatched_l7()
+#: best-effort misses rather than malformed frames, by default.
+_BEST_EFFORT_L7 = _DEFAULT_OPTIONS.best_effort
 
 
 def _classify_stop(
-    error: ProtocolError | None, layers: tuple[Protocol, ...]
+    error: ProtocolError | None,
+    layers: tuple[Protocol, ...],
+    best_effort: frozenset[type[Protocol]] = _BEST_EFFORT_L7,
 ) -> tuple[str | None, str | None]:
     """Split a lax walk's ``stopped_by`` into ``(error, l7_miss)``.
 
@@ -102,17 +173,20 @@ def _classify_stop(
     - Any other error raised while decoding a best-effort class is a
       miss: the port suggested a protocol the payload does not hold.
     - Everything else is a genuine error.
+
+    *best_effort* is the set of classes the rule applies to (see
+    :class:`DecodeOptions`).
     """
     if error is None:
         return None, None
     if isinstance(error, MaxDepthExceededError):
         self_chaining = (
-            error.protocol in _BEST_EFFORT_L7
+            error.protocol in best_effort
             and bool(layers)
             and type(layers[-1]) is error.protocol
         )
         return (None, str(error)) if self_chaining else (str(error), None)
-    if error.protocol in _BEST_EFFORT_L7:
+    if error.protocol in best_effort:
         return None, str(error)
     return str(error), None
 
@@ -207,6 +281,7 @@ def decode_frame(
     number: int,
     timestamp: int,
     interface: str | None,
+    options: DecodeOptions = _DEFAULT_OPTIONS,
 ) -> DecodedFrame:
     """Decode one captured frame.
 
@@ -228,10 +303,18 @@ def decode_frame(
     When the miss is a ClientHello too large for one segment, its SNI
     host name is still read from the bytes that are there, into
     ``DecodedFrame.sni_peek`` (see :func:`_peek_sni`).
+
+    *options* carries the dispatch tables, ``--decode-as`` overrides
+    included, and the classes the best-effort rule covers (see
+    :func:`decode_options`); the default is the library's own registry.
     """
-    packet = _decode_chain(data, lax=True, max_depth=_MAX_LAYERS)
+    packet = _decode_chain(
+        data, lax=True, max_depth=_MAX_LAYERS, registry=options.registry
+    )
     decoded_layers = packet.layers
-    error, l7_miss = _classify_stop(packet.stopped_by, decoded_layers)
+    error, l7_miss = _classify_stop(
+        packet.stopped_by, decoded_layers, options.best_effort
+    )
     trailer = packet.trailer
     payload_end = len(data) - len(trailer)
     payload = data[packet.consumed : payload_end]

@@ -53,7 +53,10 @@ full, as does an IP-in-IP packet's inner header), IPsec ESP and AH
 (SPI, sequence number, what AH protects and whether it is tunnel
 mode), TFTP (filename, mode, options, blocks, errors), RADIUS (code,
 User-Name and the other text attributes, addresses) and STUN (mapped
-addresses, errors, SOFTWARE, MESSAGE-INTEGRITY). Every
+addresses, errors, SOFTWARE, MESSAGE-INTEGRITY), and, through
+`--decode-as`, HTTP/1.x (start line, Host, User-Agent and the other
+triage fields, body framing and size, and the framing anomalies request
+smuggling rests on, flagged). Every
 IPv4/ICMPv4/ICMPv6/IGMP/GRE/TCP/UDP/SCTP/VRRP/PIM/OSPF/CDP checksum and
 STUN FINGERPRINT (and
 every OSPF LSA's LS checksum) is verified against a recomputation — inside a tunnel against
@@ -87,7 +90,8 @@ uv sync
 
 ```
 rootwire [-h] [-i INTERFACE] [-r FILE] [-w FILE]
-         [--filter NAME_OR_EXPR] [--json] [-d] [--version]
+         [--filter NAME_OR_EXPR] [--decode-as TABLE=KEY:CLASS]
+         [--json] [-d] [--version]
 
 options:
   -i, --interface   interface to capture frames from; repeat to capture on
@@ -103,13 +107,21 @@ options:
                     icmp/arp/ip/ip6; host/port, each optionally prefixed with
                     src/dst; and/or/not; parentheses (e.g. "tcp and port
                     80"); live capture only
+  --decode-as TABLE=KEY:CLASS
+                    decode what a dispatch table maps KEY to as CLASS (any
+                    NETProtocols decoder, any letter case), or as nothing
+                    with CLASS "none"; repeatable. Tables: ethertype,
+                    llc.dsap, llc.snap, ip.proto, ip.proto.v6, udp.port,
+                    tcp.port
   --json            one NDJSON object per frame on stdout (banner and
                     statistics stay on stderr): pipe straight into jq
   -d, --data        also display each frame's raw payload (ignored with --json)
 ```
 
 Capture statistics — frames, bytes, frames/s, malformed/truncated
-counts, per-protocol tallies — are reported on stderr when the capture
+counts, per-protocol tallies, and the ten largest conversations by
+bytes (both directions of a TCP/UDP/SCTP flow together, the flow inside
+a tunnel rather than the tunnel's own) — are reported on stderr when the capture
 ends, whether that's Ctrl-C, `SIGTERM`, or (for `-r`) end of file: all
 three trigger the same clean shutdown. Some favorite combinations:
 
@@ -120,7 +132,15 @@ sudo rootwire -i eth0 --filter "tcp and port 80"  # kernel-side filter expressio
 sudo rootwire -i eth0 -i wlan0                    # merge two interfaces into one stream
 rootwire -r session.pcap                          # inspect it later, no root
 rootwire -r session.pcap --json | jq .            # machine-readable analysis
+rootwire -r web.pcap --decode-as tcp.port=8080:HTTP   # HTTP is never decoded unasked
+rootwire -r tftp.pcap --decode-as udp.port=43394:TFTP # follow a transfer by its server TID
+rootwire -r lab.pcap --decode-as udp.port=1812:none   # leave RADIUS's port undecoded
 ```
+
+A port is only a hint, so a class `--decode-as` maps to a port gets the
+same treatment as the library's own port-dispatched decoders: a segment
+that does not hold a whole message of it (a bare ACK, a response body
+sent after its head) is noted with `[~]`, not reported as malformed.
 
 Live capture needs a raw socket, which on Linux means root
 (`sudo rootwire -i eth0`) or granting the interpreter the

@@ -152,6 +152,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   line, since an encrypted TLS 1.2 Finished begins that way one time in
   256; and list lines cap at 16 items with "(+N
   more)", since one packet can carry hundreds of 4-byte SCTP chunks.
+- **`--decode-as TABLE=KEY:CLASS`**, repeatable: decode what a
+  NETProtocols dispatch table maps *KEY* to as *CLASS* for this capture
+  (`tcp.port=8080:HTTP`, `udp.port=40000:TFTP`, `udp.port=5353:DNS`),
+  or as nothing with `none` (`udp.port=1812:none`). The overrides derive
+  one registry for the whole capture. A class mapped to a port is
+  best-effort like the library's own port decoders, so a bare ACK or a
+  response body on a port told to be HTTP is a `[~]` miss, not a
+  malformed frame; a class a type field also reaches (`IPv4` on a port)
+  is not. A bad value -- malformed, an unknown table or decoder, a key
+  out of its field's range, a table and key given twice -- is a usage
+  error (exit 2).
+- **HTTP/1.x screen renderer**, for HTTP reached through
+  `--decode-as` (NETProtocols registers it on no port): the start line;
+  Host, User-Agent, Referer, Content-Type, Server and Location, then
+  every field by name (credentials by name only); the body's framing
+  and size, never its bytes, and a chunked body's trailer count; the
+  anomalies that make a message's end ambiguous -- Content-Length with
+  Transfer-Encoding, a repeated or invalid Content-Length, a second
+  Host, ... -- flagged `[!]` as request-smuggling signal, the rest
+  noted `[~]`; and a count of the bytes after the message, since the
+  walk does not chain pipelined messages. Every value of the head is
+  sanitized for the terminal (read as latin-1, a lone 0x9B is a C1
+  CSI), kept on one line and cut.
+- **Conversation statistics** in the end-of-run summary: how many
+  TCP/UDP/SCTP conversations the capture held and the ten largest by
+  bytes, each with its frame and byte counts, both directions together
+  (`netprotocols.flow.flow_key`). A tunnelled frame counts under the
+  conversation inside the tunnel, VXLAN's underlay UDP never counts as
+  one, and at most 65,536 conversations are tracked, the frames of any
+  past that counted as untracked.
+- **`tests/fixtures/http/http.pcap`**, vendored byte-for-byte from
+  NETProtocols 2.9.0: 98 frames of seven HTTP/1.1 connections, outside
+  the corpus glob as upstream keeps it.
 - **Screen renderers for VXLAN, ESP, AH, TFTP, RADIUS and STUN**, the
   tunnels, IPsec headers and UDP services. VXLAN shows its VNI and
   flags, and notes reserved bits that are set; ESP its SPI, sequence
