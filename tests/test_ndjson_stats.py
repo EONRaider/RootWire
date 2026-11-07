@@ -19,6 +19,7 @@ SCHEMA_KEYS = {
     "l7_miss",
     "payload_len",
     "trailer_len",
+    "sni_peek",
     "layers",
 }
 

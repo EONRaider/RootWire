@@ -184,13 +184,16 @@ class TestFilterFlag:
     def test_invalid_expression_is_rejected_before_any_socket_opens(
         self, monkeypatch
     ):
+        """An expression outside the grammar (``igmp``: tcpdump knows it,
+        this compiler does not) fails argument validation with exit code
+        2, before any capture socket is opened."""
         opened = []
         monkeypatch.setattr(
             capture_mod, "socket", lambda *a: opened.append(a) or None
         )
 
         with pytest.raises(SystemExit) as excinfo:
-            cli.main(["-i", "eth0", "--filter", "sctp"])
+            cli.main(["-i", "eth0", "--filter", "igmp"])
 
         assert excinfo.value.code == 2
         assert opened == []  # rejected during argument validation, not setup

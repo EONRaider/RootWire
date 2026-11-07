@@ -11,7 +11,7 @@ expressions to classic BPF (cBPF).
     primitive  := proto
                 | [ dir ] "host" ipv4
                 | [ dir ] "port" number
-    proto      := "tcp" | "udp" | "icmp" | "arp" | "ip" | "ip6"
+    proto      := "tcp" | "udp" | "sctp" | "icmp" | "arp" | "ip" | "ip6"
     dir        := "src" | "dst"
     ipv4       := DIGITS "." DIGITS "." DIGITS "." DIGITS   (each 0-255)
     number     := DIGITS                                    (0-65535)
@@ -32,15 +32,15 @@ compiler cannot represent exactly is rejected, not approximated.
   IPv6's ``next_header`` directly at the fixed post-header offset,
   the same simplification tcpdump's own compiler makes for this
   primitive (confirmed by comparing against ``tcpdump -dd``).
-- SCTP: ``port``/``src port``/``dst port`` match TCP and UDP only.
-  tcpdump's own bare ``port N`` (confirmed via ``tcpdump -dd``) also
-  matches SCTP traffic on that port, even though tcpdump has no
-  ``sctp`` protocol keyword of its own either — a strict subset of
-  tcpdump's real primitive, not "exactly" it. This grammar's own
-  protocol list (``tcp``/``udp``/``icmp``/``arp``/``ip``/``ip6``) has
-  no SCTP concept anywhere, so ``port`` staying symmetric with that
-  list, rather than silently matching a protocol nothing else in this
-  grammar can name or exclude, is the more honest scope boundary.
+- SCTP ports: ``port``/``src port``/``dst port`` match TCP and UDP
+  only. tcpdump's own bare ``port N`` (confirmed via ``tcpdump -dd``)
+  also matches SCTP traffic on that port, so this is a strict subset
+  of tcpdump's real primitive, not "exactly" it. The ``sctp`` keyword
+  itself is supported (IP protocol 132 in both stacks, exactly as
+  ``tcpdump -dd sctp`` compiles it), so ``sctp`` traffic can be named
+  and excluded; widening ``port`` to SCTP as well would silently change
+  what every existing ``port`` filter matches, which a capture tool's
+  users must be able to rely on.
 
 ## Correctness strategy
 
@@ -105,8 +105,9 @@ _ETHERTYPE_ARP = 0x0806
 _IPPROTO_TCP = 6
 _IPPROTO_UDP = 17
 _IPPROTO_ICMP = 1
+_IPPROTO_SCTP = 132
 
-_PROTOCOLS: Final = ("tcp", "udp", "icmp", "arp", "ip", "ip6")
+_PROTOCOLS: Final = ("tcp", "udp", "sctp", "icmp", "arp", "ip", "ip6")
 _KEYWORDS: Final = frozenset(
     {*_PROTOCOLS, "host", "port", "src", "dst", "and", "or", "not"}
 )
@@ -447,6 +448,10 @@ def _test_at(
 def _compile_proto(
     name: str, on_true: _Label, on_false: _Label, e: _Emitter
 ) -> None:
+    """Emit the test for one protocol keyword, jumping to *on_true* or
+    *on_false*: an EtherType check for ``ip``/``arp``/``ip6``, IPv4's
+    protocol field for ``icmp``, and both stacks' protocol/next-header
+    for ``tcp``/``udp``/``sctp`` (see :func:`_compile_tcp_or_udp`)."""
     if name == "ip":
         _test_at(e, _LDH_ABS, 12, _ETHERTYPE_IPV4, on_true, on_false)
     elif name == "arp":
@@ -465,14 +470,18 @@ def _compile_proto(
             e, _LDB_ABS, _IPV4_PROTO_OFFSET, _IPPROTO_ICMP, on_true, on_false
         )
     else:
-        proto_num = _IPPROTO_TCP if name == "tcp" else _IPPROTO_UDP
+        proto_num = {
+            "tcp": _IPPROTO_TCP,
+            "udp": _IPPROTO_UDP,
+            "sctp": _IPPROTO_SCTP,
+        }[name]
         _compile_tcp_or_udp(proto_num, on_true, on_false, e)
 
 
 def _compile_tcp_or_udp(
     proto_num: int, on_true: _Label, on_false: _Label, e: _Emitter
 ) -> None:
-    """TCP and UDP protocol numbers mean the same thing in IPv4's
+    """TCP, UDP and SCTP protocol numbers mean the same thing in IPv4's
     ``protocol`` field and IPv6's ``next_header`` field, so (unlike
     ``icmp``) this checks both stacks — mirroring the already-shipped,
     tcpdump-golden-tested canned filters in ``bpf.py`` exactly,

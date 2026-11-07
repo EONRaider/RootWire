@@ -62,6 +62,13 @@ class DecodedFrame:
         because in a tunnel the tightest end is the inner datagram's, and
         an inner frame's padding inside VXLAN is trailer yet still part
         of the outer UDP datagram its checksum covers.
+    :param sni_peek: The SNI host name read from a TLS ClientHello the
+        decoder could not take whole because it spans more than one
+        segment, else ``None``. Set only alongside *l7_miss*; a
+        ClientHello that fits one segment decodes as a ``TLS`` layer
+        and exposes its name there (``TLS.server_name``). Wire text: it
+        is ASCII by the library's check, but sanitize it before display
+        all the same.
     """
 
     number: int
@@ -78,6 +85,7 @@ class DecodedFrame:
     # these fields existed keeps binding the captured bytes to ``raw``.
     l7_miss: str | None = None
     trailer: bytes = b""
+    sni_peek: str | None = None
 
     def layer(self, protocol: type[_P]) -> _P | None:
         """The first decoded layer of the given class, or ``None``.

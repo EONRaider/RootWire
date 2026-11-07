@@ -136,6 +136,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still shows its name with a raw byte count. Malformed options
   (a declared length running past the buffer) surface as a `[!]`
   diagnostic rather than raising (#79).
+- **Screen renderers for TLS, SCTP and NTP.** TLS renders one line per
+  record (content type, handshake message, record version, length) and,
+  for a ClientHello, its version, SNI host name, cipher-suite count and
+  extension list. SCTP shows its ports, verification tag, a verified
+  CRC32c checksum and its chunk types with flags. NTP shows version,
+  mode and stratum, leap/poll/precision/root delay and dispersion, the
+  Reference ID or a stratum-0 kiss code, the transmit time, NTPv4
+  extension fields and the MAC. Attacker-chosen text (the SNI, which the
+  library only checks is ASCII — ESC is ASCII — and the Reference ID or
+  kiss code) is sanitized for the terminal; on-demand sections (the
+  ClientHello, SCTP chunks, the NTP body) render a `[!]` line instead of
+  raising when malformed; and list lines cap at 16 items with "(+N
+  more)", since one packet can carry hundreds of 4-byte SCTP chunks.
+- **SNI of a ClientHello split across segments.** A ClientHello too
+  large for one segment (Chromium's) is a TLS best-effort miss, but its
+  first segment usually holds the host name: the decoder now reads it
+  with NETProtocols' `peek_server_name()` into the new
+  `DecodedFrame.sni_peek`, rendered as `[+] TLS ClientHello (continues
+  in a later segment) SNI: ...` and emitted as NDJSON `sni_peek`. Only a
+  *found* name is kept: "not reached" (the name is in a later segment)
+  is not "no SNI", and shows nothing.
+- **`--filter` accepts `sctp`**, IP protocol 132 in both stacks, exactly
+  as `tcpdump -dd sctp` compiles it (pinned against tcpdump 4.99.4
+  bytecode over the whole corpus). `port` still matches TCP and UDP
+  only, as before.
+- **SCTP has its own bucket in the capture statistics.**
 - **IGMP and GRE checksums are verified** like the others, with a
   `[!] mismatch` note (GRE only when its Checksum-Present bit is set).
 - **The corpus grows from 65 frames in 12 captures to 617 in 42**,
@@ -147,6 +173,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checksum may read as a mismatch.
 
 ### Fixed
+- **The NDJSON encoder's last-resort `str()` fallback is no longer
+  silent**: it warns once per type on stderr, so a field type a future
+  NETProtocols release adds is noticed instead of shipping as an opaque
+  string.
 - **`--json` crashed on LLDP and CDP frames** ("Object of type bytes is
   not JSON serializable"): bytes were hex-encoded only at a layer's top
   level, but LLDP/CDP keep theirs inside TLV tuples, and LLDP is decoded

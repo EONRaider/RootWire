@@ -29,7 +29,10 @@ from netprotocols import (
     DNS,
     GRE,
     IGMP,
+    NTP,
+    SCTP,
     TCP,
+    TLS,
     UDP,
     VLAN,
     DNSOverTCP,
@@ -63,6 +66,21 @@ __all__ = [
 
 _I = " " * 4  # base indentation for layer sections
 _II = " " * 8  # indentation for field detail lines
+
+#: Most items a list-style line (SCTP chunks, TLS extensions) names
+#: before summarizing the rest as "(+N more)": a crafted packet can carry
+#: hundreds of 4-byte SCTP chunks, and one line of them is unreadable.
+_LIST_LIMIT = 16
+
+
+def _capped(items: list[str]) -> str:
+    """*items* joined with ", ", cut at :data:`_LIST_LIMIT` with a
+    ``(+N more)`` suffix, or ``"none"`` when empty."""
+    if not items:
+        return "none"
+    shown = ", ".join(items[:_LIST_LIMIT])
+    extra = len(items) - _LIST_LIMIT
+    return f"{shown} (+{extra} more)" if extra > 0 else shown
 
 
 def _sanitize_for_terminal(text: str) -> str:
@@ -402,6 +420,14 @@ class OutputToScreen(Output):
                 f"{_I}[~] Payload left undecoded: "
                 f"{_sanitize_for_terminal(frame.l7_miss)}"
             )
+        if frame.sni_peek is not None:
+            # The name a split ClientHello asks for, read from its first
+            # segment (see DecodedFrame.sni_peek): what the [~] line
+            # above leaves undecoded is, in this case, worth one line.
+            self._print(
+                f"{_I}[+] TLS ClientHello (continues in a later segment) "
+                f"SNI: {_sanitize_for_terminal(frame.sni_peek)}"
+            )
         if frame.truncated:
             self._print(
                 f"{_I}[!] Truncated: the IP datagram declares more bytes "
@@ -717,6 +743,116 @@ class OutputToScreen(Output):
         )
         self._print(f"{_II}EtherType: {layer.ethertype_name}")
 
+    @_render.register
+    def _(self, layer: TLS, frame: DecodedFrame) -> None:
+        """TLS: one line per record (a segment often holds several),
+        naming its content type, the handshake message for a Handshake
+        record, the record-layer version and length. A ClientHello also
+        gets its own version, SNI host name, cipher-suite count and
+        extension list, parsed on demand inside a guard: an encrypted
+        TLS 1.2 Finished whose ciphertext happens to start with 1 reads
+        as a ClientHello and raises (see
+        :attr:`netprotocols.TLS.client_hello`). A ClientHello may carry no
+        extensions block at all (TLS 1.2 and earlier)."""
+        message = (
+            f" ({layer.handshake_type_name})"
+            if layer.handshake_type_name
+            else ""
+        )
+        self._print(
+            f"{_I}[+] TLS {layer.content_type_name}{message} | "
+            f"{layer.legacy_version_name} | "
+            f"{layer.length} byte{'' if layer.length == 1 else 's'}"
+        )
+        with self._guard("ClientHello"):
+            hello = layer.client_hello
+            if hello is None:
+                return
+            # The library checks the name is ASCII, but ESC is ASCII:
+            # the SNI is chosen by whoever sent the ClientHello.
+            name = layer.server_name
+            sni = _sanitize_for_terminal(name) if name is not None else "none"
+            self._print(
+                f"{_II}ClientHello: {hello.legacy_version_name} | "
+                f"SNI: {sni} | "
+                f"Cipher suites: {len(hello.cipher_suites) // 2}"
+            )
+            self._print(
+                f"{_II}Extensions: "
+                + _capped([ext.type_name for ext in hello.extensions or ()])
+            )
+
+    @_render.register
+    def _(self, layer: SCTP, frame: DecodedFrame) -> None:
+        """SCTP: ports, verification tag, the CRC32c checksum verified
+        (RFC 9260 §6.8; skipped inside a fragment), and the chunk types
+        in wire order with their flags. Chunks parse on demand, so they
+        render inside a guard."""
+        self._print(f"{_I}[+] SCTP {layer.src_port} -> {layer.dst_port}")
+        note = _transport_checksum_note(frame, layer)
+        self._print(
+            f"{_II}Verification Tag: {layer.verification_tag_hex_str} | "
+            f"Checksum: {layer.checksum_hex_str}{note}"
+        )
+        with self._guard("Chunks"):
+            chunks = [
+                f"{chunk.type_name} [{chunk.flags_str}]"
+                if chunk.flags_str
+                else chunk.type_name
+                for chunk in layer.parsed_chunks
+            ]
+            self._print(f"{_II}Chunks: {_capped(chunks)}")
+
+    @_render.register
+    def _(self, layer: NTP, frame: DecodedFrame) -> None:
+        """NTP: version, mode and stratum; leap indicator, poll interval,
+        precision and root delay/dispersion; the Reference ID, or the
+        kiss code a stratum-0 message carries instead (sanitized: both
+        are bytes the sender chose); the transmit time; and any NTPv4
+        extension fields, MAC and unparsed remainder."""
+        self._print(
+            f"{_I}[+] NTP v{layer.version} {layer.mode_name} | "
+            f"Stratum {layer.stratum} ({layer.stratum_name})"
+        )
+        self._print(
+            f"{_II}Leap: {layer.leap_name} | Poll: {layer.poll_seconds:g}s | "
+            f"Precision: {layer.precision_seconds:g}s | "
+            f"Root delay: {layer.root_delay_seconds:g}s | "
+            f"Root dispersion: {layer.root_dispersion_seconds:g}s"
+        )
+        with self._guard("Body"):
+            if (kiss := layer.kiss_code) is not None:
+                self._print(f"{_II}Kiss code: {_sanitize_for_terminal(kiss)}")
+            elif reference := layer.reference_id_str:
+                self._print(
+                    f"{_II}Reference ID: {_sanitize_for_terminal(reference)}"
+                )
+            transmit = layer.transmit_time
+            self._print(
+                f"{_II}Transmit: "
+                + (transmit.isoformat() if transmit is not None else "none")
+            )
+            self._render_ntp_tail(layer)
+
+    def _render_ntp_tail(self, layer: NTP) -> None:
+        """The NTPv4 extension fields, MAC and unparsed remainder of an
+        NTP message, each line only when present."""
+        fields = [
+            f"{field.type_name} ({len(field.value)} bytes)"
+            for field in layer.extension_fields
+        ]
+        if fields:
+            self._print(f"{_II}Extension fields: {_capped(fields)}")
+        if (mac := layer.mac) is not None:
+            detail = (
+                "crypto-NAK"
+                if mac.is_crypto_nak
+                else f"key {mac.key_id}, {len(mac.digest)}-byte digest"
+            )
+            self._print(f"{_II}MAC: {detail}")
+        if layer.remainder:
+            self._print(f"{_II}Unparsed: {len(layer.remainder)} bytes")
+
 
 class OutputToPcap(Output):
     """Write every frame's exact captured bytes to a classic pcap file.
@@ -751,8 +887,10 @@ def _json_default(value: Any) -> Any:
       encodes as its int and never reaches here).
     - ``ipaddress`` objects → their string form.
     - ``set``/``frozenset`` → a sorted list, for stable output.
-    - Anything else → ``str(value)``: an output must never kill a
-      capture over a field type a future NETProtocols release adds.
+    - Anything else → ``str(value)``, with a one-time warning on stderr
+      per type (:func:`_warn_unencodable`): an output must never kill a
+      capture over a field type a future NETProtocols release adds, but
+      it must not hide it either.
     """
     if isinstance(value, bytes | bytearray | memoryview):
         return bytes(value).hex()
@@ -768,7 +906,33 @@ def _json_default(value: Any) -> Any:
         return str(value)
     if isinstance(value, set | frozenset):
         return sorted(value, key=repr)
+    _warn_unencodable(type(value))
     return str(value)
+
+
+#: Types :func:`_json_default` has already warned about, so a field type
+#: that appears in every frame warns once, not once per frame.
+_WARNED_TYPES: set[type] = set()
+
+
+def _warn_unencodable(kind: type) -> None:
+    """Say once on stderr that a field type has no JSON encoding and is
+    being emitted as its ``str()`` form.
+
+    The fallback keeps the capture alive, but silently: a consumer would
+    see an opaque string such as ``<object object at 0x...>`` and no one
+    would know a NETProtocols release had added a type this module
+    should encode properly. stderr already carries ``--json`` mode's
+    banner and statistics, so stdout stays pure NDJSON.
+    """
+    if kind in _WARNED_TYPES:
+        return
+    _WARNED_TYPES.add(kind)
+    print(
+        f"[!] NDJSON: no JSON encoding for {kind.__module__}."
+        f"{kind.__qualname__}; emitting its str() form",
+        file=sys.stderr,
+    )
 
 
 def _layer_record(layer: Protocol) -> dict[str, Any]:
@@ -803,7 +967,9 @@ class OutputToNDJSON(Output):
     its length is reported as ``payload_len``, and the frame's trailer
     (padding, FCS) as ``trailer_len``. ``l7_miss`` carries the reason a
     port-dispatched application decoder declined the payload, or
-    ``null``. Lines are flushed as they are
+    ``null``, and ``sni_peek`` the SNI host name of a ClientHello split
+    across segments (see :attr:`DecodedFrame.sni_peek`), or ``null``.
+    Lines are flushed as they are
     written so the output pipes cleanly into consumers like ``jq``.
 
     :param stream: Destination stream; defaults to stdout.
@@ -826,6 +992,7 @@ class OutputToNDJSON(Output):
             "l7_miss": frame.l7_miss,
             "payload_len": len(frame.payload),
             "trailer_len": len(frame.trailer),
+            "sni_peek": frame.sni_peek,
             "layers": [_layer_record(layer) for layer in frame.layers],
         }
         print(
@@ -836,14 +1003,14 @@ class OutputToNDJSON(Output):
 
 
 #: Innermost-layer classes counted by name in the statistics report.
-_STATS_BUCKETS = (TCP, UDP, ICMPv4, ICMPv6, ARP)
+_STATS_BUCKETS = (TCP, UDP, SCTP, ICMPv4, ICMPv6, ARP)
 
 
 class StatsCollector(Output):
     """Accumulate capture statistics; render them with :meth:`report`.
 
     The per-protocol tally buckets each frame by its innermost decoded
-    layer among TCP/UDP/ICMPv4/ICMPv6/ARP — unambiguous even when a
+    layer among TCP/UDP/SCTP/ICMPv4/ICMPv6/ARP — unambiguous even when a
     chain ends at an extension header or a non-first fragment, which
     count as ``other``.
     """

@@ -153,7 +153,13 @@ as exceptions to die on:
   malformed, the undecoded bytes left as payload, and a `[~]` note on
   screen only when there are bytes to explain. Checking the stopping
   *class*, not where in the frame the stop happened, is what keeps a
-  truncated DNS header on port 53 an error.
+  truncated DNS header on port 53 an error. One miss is common enough
+  to read anyway: a ClientHello larger than one segment (Chromium's,
+  with its post-quantum key share). Its host name usually sits in the
+  first segment, so for a TLS miss `decoder.py` runs NETProtocols'
+  `peek_server_name()` over the undecoded bytes — a bounded, stateless
+  read of the first record — and keeps a *found* name as
+  `frame.sni_peek` (NDJSON `sni_peek`).
 - **Malformed header?** The library raises a typed `ProtocolError`
   (truncated buffer, lying length field). `decode_frame()` calls the
   library's own `decode_frame()` with `lax=True`, which keeps the
@@ -231,7 +237,7 @@ plus an optional `close()` for resources at end of capture:
   capture timestamp; the files open in Wireshark and tcpdump.
 - **`StatsCollector`** tallies frames, bytes, malformed and truncated
   counts, and per-protocol totals bucketed by the innermost decoded
-  layer among TCP/UDP/ICMPv4/ICMPv6/ARP (an extension-header or
+  layer among TCP/UDP/SCTP/ICMPv4/ICMPv6/ARP (an extension-header or
   non-first-fragment ending counts as `other`). The report — with
   duration and frames/s — lands on stderr at Ctrl-C or replay
   end-of-file.

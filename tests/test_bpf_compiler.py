@@ -11,7 +11,8 @@ corpus, for a representative battery of expressions across the whole
 grammar, and asserts they always agree on accept/reject.
 
 _TCPDUMP_GOLDEN is transcribed byte-for-byte from real `tcpdump -dd
-<expr>` runs (tcpdump 4.99.1 / libpcap 1.10.1) -- a golden fixture
+<expr>` runs (tcpdump 4.99.1 / libpcap 1.10.1; the three ``sctp``
+entries from tcpdump 4.99.4 / libpcap 1.10.4) -- a golden fixture
 generated once and pinned here, the same approach test_bpf.py already
 uses for the canned filters, deliberately not re-invoked at test time
 so this suite has no tcpdump dependency in CI.
@@ -339,6 +340,49 @@ _TCPDUMP_GOLDEN: dict[str, tuple[SockFilter, ...]] = {
         (0x6, 0, 0, 0x00040000),
         (0x6, 0, 0, 0x00000000),
     ),
+    "sctp": (
+        (0x28, 0, 0, 0x0000000C),
+        (0x15, 0, 2, 0x00000800),
+        (0x30, 0, 0, 0x00000017),
+        (0x15, 6, 7, 0x00000084),
+        (0x15, 0, 6, 0x000086DD),
+        (0x30, 0, 0, 0x00000014),
+        (0x15, 3, 0, 0x00000084),
+        (0x15, 0, 3, 0x0000002C),
+        (0x30, 0, 0, 0x00000036),
+        (0x15, 0, 1, 0x00000084),
+        (0x6, 0, 0, 0x00040000),
+        (0x6, 0, 0, 0x00000000),
+    ),
+    "sctp or udp": (
+        (0x28, 0, 0, 0x0000000C),
+        (0x15, 0, 2, 0x00000800),
+        (0x30, 0, 0, 0x00000017),
+        (0x15, 7, 6, 0x00000084),
+        (0x15, 0, 7, 0x000086DD),
+        (0x30, 0, 0, 0x00000014),
+        (0x15, 4, 0, 0x00000084),
+        (0x15, 0, 2, 0x0000002C),
+        (0x30, 0, 0, 0x00000036),
+        (0x15, 1, 0, 0x00000084),
+        (0x15, 0, 1, 0x00000011),
+        (0x6, 0, 0, 0x00040000),
+        (0x6, 0, 0, 0x00000000),
+    ),
+    "not sctp": (
+        (0x28, 0, 0, 0x0000000C),
+        (0x15, 0, 2, 0x00000800),
+        (0x30, 0, 0, 0x00000017),
+        (0x15, 6, 7, 0x00000084),
+        (0x15, 0, 6, 0x000086DD),
+        (0x30, 0, 0, 0x00000014),
+        (0x15, 3, 0, 0x00000084),
+        (0x15, 0, 3, 0x0000002C),
+        (0x30, 0, 0, 0x00000036),
+        (0x15, 0, 1, 0x00000084),
+        (0x6, 0, 0, 0x00000000),
+        (0x6, 0, 0, 0x00040000),
+    ),
 }
 
 _CORPUS_FRAMES: list[bytes] = [frame for _, _, frame in corpus_frames()]
@@ -405,7 +449,7 @@ class TestCrossCheckAgainstTheDecoder:
 
     @pytest.mark.parametrize(
         ("expr", "proto_number"),
-        [("tcp", 6), ("udp", 17)],
+        [("tcp", 6), ("udp", 17), ("sctp", 132)],
     )
     def test_tcp_udp_matches_ip_protocol_number_in_both_stacks(
         self, expr, proto_number
@@ -469,7 +513,7 @@ class TestGrammarRejection:
         "expr",
         [
             "",
-            "sctp",  # not one of the six supported protocol keywords
+            "igmp",  # not one of the seven supported protocol keywords
             "host ::1",  # IPv6 host addresses are out of scope
             "192.168.1.1",  # bare address without 'host' is not supported
             "host",  # missing address
@@ -490,8 +534,8 @@ class TestGrammarRejection:
             compile_expression(expr)
 
     def test_error_message_names_the_expression(self):
-        with pytest.raises(BPFCompileError, match="sctp"):
-            compile_expression("sctp")
+        with pytest.raises(BPFCompileError, match="igmp"):
+            compile_expression("igmp")
 
     def test_directionless_dangling_operator_names_the_right_gap(self):
         """'expected a primitive after src/dst' would be a misleading
