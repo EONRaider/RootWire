@@ -151,7 +151,11 @@ as exceptions to die on:
   predate the upgrade and stay real signal) and records a stop inside
   one as `frame.l7_miss`, not `frame.error`: no `[!]`, not counted as
   malformed, the undecoded bytes left as payload, and a `[~]` note on
-  screen only when there are bytes to explain. Checking the stopping
+  screen only when there are bytes to explain. (`[~]` marks a line the
+  analyst should read as information, not a fault; the TLS renderer
+  uses it too, for a Handshake record that does not parse as the
+  ClientHello its first byte announces, which an encrypted TLS 1.2
+  Finished does one time in 256.) Checking the stopping
   *class*, not where in the frame the stop happened, is what keeps a
   truncated DNS header on port 53 an error. One miss is common enough
   to read anyway: a ClientHello larger than one segment (Chromium's,
