@@ -15,9 +15,10 @@ conversation statistics, and hardens what reaches the terminal. It is a
 major release for three breaking changes, each marked **BREAKING**
 below: the NDJSON wire `type` field of ICMPv4/ICMPv6/IGMP/BGP/OSPF/PIM/
 VRRP layers moves to `type_`; `rootwire.pcap.read_pcap()` is renamed
-`read_captures()`; and `DecodedFrame.payload` no longer carries Ethernet
-padding or a captured FCS, which move to `DecodedFrame.trailer`. CLI
-options and exit codes are unchanged.
+`read_captures()`; and `DecodedFrame.payload` no longer carries the
+Ethernet padding or captured FCS past the frame's declared lengths,
+which move to `DecodedFrame.trailer`. Existing CLI options and exit
+codes are unchanged; `--decode-as` is new.
 
 ### Security
 - LLDP's System Name, Port Description and System Description are now
@@ -87,7 +88,10 @@ options and exit codes are unchanged.
 - **BREAKING (library API):** **Ethernet padding and a captured FCS are split out as
   `DecodedFrame.trailer`** (the library's `packet.trailer`) instead of
   being part of `frame.payload`, so `-d` no longer prints padding as
-  payload. NDJSON reports its length as the new `trailer_len`.
+  payload. NDJSON reports its length as the new `trailer_len`. The
+  split needs a declared length to cut at (IPv4 Total Length, UDP
+  Length, an 802.3 Length), so behind an Ethernet II EtherType that
+  nothing decodes, a captured FCS stays in `payload`.
 - **NDJSON records gain `l7_miss` and `trailer_len`.**
 - **`decoder.py` now delegates its chain walk to `netprotocols.decode_frame()`
   instead of hand-rolling the same loop the library has shipped since
