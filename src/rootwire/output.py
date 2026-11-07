@@ -42,6 +42,7 @@ from netprotocols import (
     UDP,
     VLAN,
     VRRP,
+    BGPPathAttribute,
     DNSOverTCP,
     Ethernet,
     ICMPv4,
@@ -341,7 +342,9 @@ def _transport_checksum_note(frame: DecodedFrame, layer: Protocol) -> str:
 #: bind-all-interfaces address (B104).
 _UNSET_ADDRESS = str(ipaddress.IPv4Address(0))
 
-#: RIP's IP Address Family Identifier, and its metric "infinity".
+#: RIP's Request command, IP Address Family Identifier, and its metric
+#: "infinity".
+_RIP_REQUEST = 1
 _RIP_AFI_IP = 2
 _RIP_INFINITY = 16
 
@@ -349,13 +352,23 @@ _RIP_INFINITY = 16
 _IPV6_VERSION = 6
 
 
+def _inline_text(text: str) -> str:
+    """*text* sanitized for the terminal (see
+    :func:`_sanitize_for_terminal`) and kept on one line: a newline is
+    shown as ``\\n``. For wire text rendered inside a field line, where
+    a sender-chosen newline could otherwise start a line that reads as
+    RootWire's own (a forged ``[>] Frame`` header or ``[!]`` note)."""
+    return _sanitize_for_terminal(text).replace("\n", "\\n")
+
+
 def _secret_text(data: bytes) -> str:
     """A clear-text password field (VRRPv2 PASS, RIP type 2, OSPF
     AuType 1) for display: its NUL padding stripped, any byte outside
     ASCII shown as ``\\xNN``, and the result sanitized for the terminal
-    -- ESC is ASCII, and the sender chose every byte."""
+    on one line (see :func:`_inline_text`) -- ESC and newline are ASCII,
+    and the sender chose every byte."""
     text = data.rstrip(b"\x00").decode("ascii", errors="backslashreplace")
-    return _sanitize_for_terminal(text) if text else "(empty)"
+    return _inline_text(text) if text else "(empty)"
 
 
 def _or_none(address: str) -> str:
@@ -393,12 +406,18 @@ def _rip_route_text(entry: RIPEntry) -> str:
     """
     destination = entry.address
     if entry.subnet_mask != _UNSET_ADDRESS:
+        network: ipaddress.IPv4Network | None
         try:
             network = ipaddress.IPv4Network(
                 f"{entry.address}/{entry.subnet_mask}", strict=False
             )
-            destination = f"{entry.address}/{network.prefixlen}"
         except ValueError:
+            network = None
+        # ipaddress reads a mask such as 0.255.255.255 as a *host* mask
+        # and inverts it; only a mask it reproduces is a prefix length.
+        if network is not None and str(network.netmask) == entry.subnet_mask:
+            destination = f"{entry.address}/{network.prefixlen}"
+        else:
             destination = f"{entry.address} mask {entry.subnet_mask}"
     if entry.afi != _RIP_AFI_IP:
         destination = f"{destination} ({entry.afi_name})"
@@ -1088,7 +1107,9 @@ class OutputToScreen(Output):
                 )
                 self._print(f"{_II}Auth: {_rip_auth_text(auth)}{extra}")
             routes = layer.routes
-            if _is_whole_table_request(routes):
+            if layer.command == _RIP_REQUEST and _is_whole_table_request(
+                routes
+            ):
                 self._print(f"{_II}Request: the whole routing table")
             else:
                 self._print(
@@ -1335,10 +1356,7 @@ class OutputToScreen(Output):
             + (f" / {subcode}" if subcode else "")
         )
         if (message := layer.shutdown_communication) is not None:
-            self._print(
-                f"{_II}Shutdown communication: "
-                f"{_sanitize_for_terminal(message)}"
-            )
+            self._print(f"{_II}Shutdown communication: {_inline_text(message)}")
         elif layer.error_data:
             self._print(f"{_II}Data: {len(layer.error_data)} bytes")
 
@@ -1380,6 +1398,28 @@ _BGP_BODIES: dict[int, Callable[[OutputToScreen, BGP], None]] = {
 }
 
 
+#: Most bytes of a raw BGP path attribute value shown in hex: one
+#: attribute can be up to 65,535 bytes long (an AS_PATH, COMMUNITIES or
+#: an attribute this library keeps raw), far past one readable line.
+_BGP_VALUE_PREVIEW = 32
+
+
+def _bgp_attribute_text(attribute: BGPPathAttribute) -> str:
+    """One path attribute as ``"NAME value"``: the decoded value for the
+    types the library decodes (ORIGIN, NEXT_HOP, MED, LOCAL_PREF), else
+    the raw value in hex, its first :data:`_BGP_VALUE_PREVIEW` bytes
+    only, with the full length when it is cut."""
+    if attribute.value is not None:
+        return f"{attribute.type_name} {attribute.value_text}"
+    data = attribute.data
+    if not data:
+        return f"{attribute.type_name} (empty)"
+    if len(data) <= _BGP_VALUE_PREVIEW:
+        return f"{attribute.type_name} {data.hex()}"
+    preview = data[:_BGP_VALUE_PREVIEW].hex()
+    return f"{attribute.type_name} {preview}... ({len(data)} bytes)"
+
+
 def _bgp_update_lines(layer: BGP) -> list[str]:
     """The withdrawn-routes, path-attributes and NLRI lines of a BGP
     UPDATE, each only when that part is non-empty, each list capped:
@@ -1395,7 +1435,7 @@ def _bgp_update_lines(layer: BGP) -> list[str]:
         (f"Withdrawn ({len(withdrawn)})", [str(p.network) for p in withdrawn]),
         (
             "Attributes",
-            [f"{a.type_name} {a.value_text or '(empty)'}" for a in attributes],
+            [_bgp_attribute_text(a) for a in attributes],
         ),
         (f"NLRI ({len(nlri)})", [str(p.network) for p in nlri]),
     )

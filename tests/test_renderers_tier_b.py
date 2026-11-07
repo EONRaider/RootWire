@@ -287,6 +287,34 @@ def test_rip_route_next_hop_odd_mask_and_remainder() -> None:
     assert "Unparsed: 3 bytes" in text
 
 
+def test_rip_host_mask_is_not_read_as_a_prefix() -> None:
+    """ipaddress inverts a mask such as 0.255.255.255 as a host mask;
+    the wire mask is shown as itself, not as the /8 it would become."""
+    entry = RIPEntry(2, 0, "10.0.0.0", "0.255.255.255", _ZERO, 1)
+    text = render(udp_frame(520, RIP(command=2, version=2, body=bytes(entry))))
+    assert "10.0.0.0 mask 0.255.255.255 metric 1" in text
+    assert "/8" not in text
+
+
+def test_rip_response_shaped_like_a_table_request_is_a_route() -> None:
+    """Only a Request with one AFI 0, metric 16 entry asks for the whole
+    table; a Response with that entry still shows it."""
+    entry = RIPEntry(0, 0, _ZERO, _ZERO, _ZERO, 16)
+    text = render(udp_frame(520, RIP(command=2, version=2, body=bytes(entry))))
+    assert "whole routing table" not in text
+    assert "Routes (1):" in text
+    assert "unreachable" in text
+
+
+def test_rip_password_newline_stays_on_one_line() -> None:
+    """C1: a newline in a password cannot start a forged line."""
+    secret = b"pw\n[!] forged".ljust(16, b"\x00")
+    body = b"\xff\xff\x00\x02" + secret
+    text = render(udp_frame(520, RIP(command=1, version=2, body=body)))
+    assert "(pw\\n[!] forged)" in text
+    assert "\n[!] forged" not in text
+
+
 def test_rip_password_is_sanitized() -> None:
     """C1: a RIP plain-text password is shown escaped."""
     secret = (_ESC + _BIDI + "pw").encode().ljust(16, b"\x00")
@@ -547,6 +575,27 @@ def test_bgp_shutdown_communication_is_sanitized() -> None:
     text = render(bgp_frame(bgp(3, body)))
     assert_escaped(text)
     assert "Shutdown communication: \\x1b[2J\\u202ebye" in text
+
+
+def test_bgp_shutdown_communication_newline_stays_on_one_line() -> None:
+    """C1: a newline in the shutdown communication cannot forge a
+    frame header or diagnostic line."""
+    message = b"bye\n[>] Frame #9 forged"
+    body = b"\x06\x02" + bytes([len(message)]) + message
+    text = render(bgp_frame(bgp(3, body)))
+    assert "Shutdown communication: bye\\n[>] Frame #9 forged" in text
+    assert "\n[>] Frame #9" not in text
+
+
+def test_bgp_long_raw_attribute_is_truncated() -> None:
+    """A raw attribute value shows its first 32 bytes in hex and its
+    full length: one attribute can run to 65,535 bytes."""
+    value = bytes(range(200))
+    attribute = b"\x90\x08" + len(value).to_bytes(2, "big") + value
+    update = bgp(2, b"\x00\x00" + len(attribute).to_bytes(2, "big") + attribute)
+    text = render(bgp_frame(update))
+    assert f"COMMUNITIES {value[:32].hex()}... (200 bytes)" in text
+    assert value[32:].hex() not in text
 
 
 def test_bgp_malformed_update_is_contained() -> None:

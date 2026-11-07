@@ -174,7 +174,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an UPDATE's withdrawn routes, attributes and NLRI (or End-of-RIB), a
   NOTIFICATION's error and RFC 9003 shutdown communication. Clear-text
   passwords (VRRPv2 PASS, RIP, OSPF AuType 1), HSRP's Authentication
-  Data and BGP's shutdown communication are sanitized for the terminal;
+  Data and BGP's shutdown communication are sanitized for the terminal
+  and kept on one line (a newline shows as `\n`, so a peer cannot forge
+  a frame header or diagnostic); a raw BGP attribute value shows its
+  first 32 bytes;
   BGP and PIM bodies parse on demand and render a `[!]` line instead of
   raising when malformed; every list caps at 16 items. A PIM Register's
   inner datagram is read from its IP header alone, not walked, so the
