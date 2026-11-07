@@ -15,6 +15,7 @@ import io
 import pytest
 from netprotocols import (
     CDP,
+    CDPTLV,
     LLC,
     LLDP,
     LLDPTLV,
@@ -159,6 +160,15 @@ def test_lldp_long_description_is_cut() -> None:
     )
 
 
+def test_lldp_duplicate_text_tlv_is_shown() -> None:
+    """A second System Name, out of spec, is shown, not hidden behind
+    the first."""
+    first, second = LLDPTLV(5, b"switch-a"), LLDPTLV(5, b"switch-b")
+    text = render(lldp_frame(*mandatory_tlvs(), first, second))
+    assert "System Name: switch-a\n" in text
+    assert "System Name: switch-b\n" in text
+
+
 # --- CDP -------------------------------------------------------------------
 
 
@@ -198,6 +208,21 @@ def test_cdp_text_is_sanitized_and_one_line() -> None:
     assert_escaped(text)
     assert "Device ID: \\x1b[2Jevil\\n | Port ID" in text
     assert "Software: NETProtocols\\n[!]" in text
+
+
+def test_cdp_long_device_id_is_cut() -> None:
+    """A Device ID is cut at the text limit like the Software Version."""
+    long_id = b"d" * (_TEXT_LIMIT + 40)
+    cdp = CDP(version=2, ttl=180, checksum=0, tlvs=(CDPTLV(1, long_id),))
+    llc = LLC(dsap=0xAA, ssap=0xAA, control=0x03)
+    snap = SNAP(oui=0x00000C, pid=0x2000)
+    body = len(bytes(llc)) + len(bytes(snap)) + len(bytes(cdp))
+    eth = Ethernet(
+        dst="01:00:0c:cc:cc:cc", src="02:00:00:00:00:01", ethertype=body
+    )
+    text = render(bytes(Packet(eth, llc, snap, cdp).with_checksums()))
+    assert f"Device ID: {'d' * _TEXT_LIMIT}... (+40 more chars)" in text
+    assert "mismatch" not in text
 
 
 # --- STP -------------------------------------------------------------------

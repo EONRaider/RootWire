@@ -1377,8 +1377,9 @@ class OutputToScreen(Output):
         """LLDP: the Chassis ID, Port ID and Time To Live an analyst maps
         a neighbor by (0 is a shutdown LLDPDU), flagged when the LLDPDU
         does not open with them as 802.1AB requires; the System Name,
-        Port Description and System Description, sanitized and kept on
-        one line -- the neighbor chose every byte -- and every other TLV
+        Port Description and System Description (duplicates included),
+        sanitized, kept on one line and cut -- the neighbor chose every
+        byte -- and every other TLV
         by name and size. No accessor here raises."""
         chassis, port, ttl = layer.chassis_id, layer.port_id, layer.ttl
         shutdown = " (shutdown)" if layer.is_shutdown else ""
@@ -1393,8 +1394,11 @@ class OutputToScreen(Output):
                 f"to Live (802.1AB): receivers discard it"
             )
         for label, tlv_type in _LLDP_TEXT_TLVS:
-            if (tlv := layer.tlv(tlv_type)) is not None:
-                self._print(f"{_II}{label}: {_wire_text(tlv.value)}")
+            # Every one, not just the first: a duplicate is out of spec
+            # (lldpd drops it, Wireshark flags it), so it is shown too.
+            for tlv in layer.tlvs:
+                if tlv.type == tlv_type:
+                    self._print(f"{_II}{label}: {_wire_text(tlv.value)}")
         others = [
             _lldp_tlv_text(tlv)
             for tlv in layer.tlvs
@@ -1407,7 +1411,7 @@ class OutputToScreen(Output):
     def _(self, layer: CDP, frame: DecodedFrame) -> None:
         """CDP: version, TTL and the checksum, verified over the whole
         PDU; the Device ID, Port ID and Platform, then the Software
-        Version, each sanitized and kept on one line (a neighbor's
+        Version, each sanitized, kept on one line and cut (a neighbor's
         free text); the capabilities and addresses; and every other TLV
         by name. No accessor here raises."""
         note = _checksum_note(layer)
@@ -1416,7 +1420,7 @@ class OutputToScreen(Output):
             f"Checksum: {layer.checksum_hex_str}{note}"
         )
         identity = [
-            f"{label}: {_inline_text(text)}"
+            f"{label}: {_cut(_inline_text(text))}"
             for label, text in (
                 ("Device ID", layer.device_id),
                 ("Port ID", layer.port_id),
